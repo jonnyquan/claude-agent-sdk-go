@@ -605,7 +605,7 @@ func TestResultMessageOptionalFields(t *testing.T) {
 	}
 	dataWithOptionals["total_cost_usd"] = 0.05
 	dataWithOptionals["usage"] = map[string]any{"input_tokens": 100}
-	dataWithOptionals["result"] = map[string]any{"status": "success"}
+	dataWithOptionals["result"] = "Task completed successfully" // Note: Python SDK uses string type
 
 	msg, err := parser.ParseMessage(dataWithOptionals)
 	assertNoParseError(t, err)
@@ -620,19 +620,22 @@ func TestResultMessageOptionalFields(t *testing.T) {
 	if resultMsg.Result == nil {
 		t.Error("Expected result field to be set")
 	}
+	if *resultMsg.Result != "Task completed successfully" {
+		t.Errorf("Expected result = 'Task completed successfully', got %v", *resultMsg.Result)
+	}
 
-	// Test with invalid result type (not map)
+	// Test with invalid result type (not string)
 	dataWithInvalidResult := make(map[string]any)
 	for k, v := range baseData {
 		dataWithInvalidResult[k] = v
 	}
-	dataWithInvalidResult["result"] = "not a map"
+	dataWithInvalidResult["result"] = map[string]any{"status": "success"} // Invalid: should be string
 
 	msg2, err2 := parser.ParseMessage(dataWithInvalidResult)
 	assertNoParseError(t, err2)
 	resultMsg2 := msg2.(*shared.ResultMessage)
 	if resultMsg2.Result != nil {
-		t.Error("Expected result field to be nil for invalid type")
+		t.Error("Expected result field to be nil for invalid type (non-string)")
 	}
 }
 

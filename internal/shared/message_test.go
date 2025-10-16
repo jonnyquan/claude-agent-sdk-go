@@ -101,7 +101,7 @@ func TestContentBlockTypes(t *testing.T) {
 			name: "tool_use_block",
 			createBlock: func() ContentBlock {
 				return &ToolUseBlock{
-					ToolUseID: "tool_456",
+					ID: "tool_456",
 					Name:      "Read",
 					Input: map[string]any{
 						"file_path": "/home/user/document.txt",
@@ -209,7 +209,7 @@ func TestInterfaceCompliance(t *testing.T) {
 	blocks := []ContentBlock{
 		&TextBlock{Text: "test"},
 		&ThinkingBlock{Thinking: "test", Signature: "test"},
-		&ToolUseBlock{ToolUseID: "test", Name: "test", Input: map[string]any{}},
+		&ToolUseBlock{ID: "test", Name: "test", Input: map[string]any{}},
 		&ToolResultBlock{ToolUseID: "test", Content: "test"},
 	}
 
@@ -351,8 +351,8 @@ func validateToolUseBlock(t *testing.T, block ContentBlock) {
 	if !ok {
 		t.Fatalf("Expected *ToolUseBlock, got %T", block)
 	}
-	if toolBlock.ToolUseID == "" {
-		t.Error("Expected non-empty ToolUseID field")
+	if toolBlock.ID == "" {
+		t.Error("Expected non-empty ID field")
 	}
 	if toolBlock.Name == "" {
 		t.Error("Expected non-empty Name field")

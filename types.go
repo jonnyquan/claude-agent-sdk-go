@@ -36,8 +36,7 @@ type ToolUseBlock = shared.ToolUseBlock
 // ToolResultBlock represents a tool result content block.
 type ToolResultBlock = shared.ToolResultBlock
 
-// ImageBlock represents an image content block.
-type ImageBlock = shared.ImageBlock
+// Note: ImageBlock removed - not part of Python SDK ContentBlock types
 
 // AgentDefinition represents a custom agent configuration.
 type AgentDefinition = shared.AgentDefinition
@@ -62,7 +61,7 @@ const (
 	ContentBlockTypeThinking   = shared.ContentBlockTypeThinking
 	ContentBlockTypeToolUse    = shared.ContentBlockTypeToolUse
 	ContentBlockTypeToolResult = shared.ContentBlockTypeToolResult
-	ContentBlockTypeImage      = shared.ContentBlockTypeImage
+	// Note: ContentBlockTypeImage removed - not part of Python SDK
 )
 
 // Transport abstracts the communication layer with Claude Code CLI.

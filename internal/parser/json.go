@@ -276,8 +276,8 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 	}
 
 	if resultData, ok := data["result"]; ok {
-		if resultMap, ok := resultData.(map[string]any); ok {
-			result.Result = &resultMap
+		if resultStr, ok := resultData.(string); ok {
+			result.Result = &resultStr
 		}
 	}
 
@@ -319,8 +319,8 @@ func (p *Parser) parseTextBlock(data map[string]any) (shared.ContentBlock, error
 		return nil, shared.NewMessageParseError("text block missing text field", data)
 	}
 	return &shared.TextBlock{
-		MessageType: shared.ContentBlockTypeText,
-		Text:        text,
+		Type: shared.ContentBlockTypeText,
+		Text: text,
 	}, nil
 }
 
@@ -331,9 +331,9 @@ func (p *Parser) parseThinkingBlock(data map[string]any) (shared.ContentBlock, e
 	}
 	signature, _ := data["signature"].(string) // Optional field
 	return &shared.ThinkingBlock{
-		MessageType: shared.ContentBlockTypeThinking,
-		Thinking:    thinking,
-		Signature:   signature,
+		Type:      shared.ContentBlockTypeThinking,
+		Thinking:  thinking,
+		Signature: signature,
 	}, nil
 }
 
@@ -351,10 +351,10 @@ func (p *Parser) parseToolUseBlock(data map[string]any) (shared.ContentBlock, er
 		input = make(map[string]any)
 	}
 	return &shared.ToolUseBlock{
-		MessageType: shared.ContentBlockTypeToolUse,
-		ToolUseID:   id,
-		Name:        name,
-		Input:       input,
+		Type:  shared.ContentBlockTypeToolUse,
+		ID:    id,
+		Name:  name,
+		Input: input,
 	}, nil
 }
 
@@ -372,10 +372,10 @@ func (p *Parser) parseToolResultBlock(data map[string]any) (shared.ContentBlock,
 	}
 
 	return &shared.ToolResultBlock{
-		MessageType: shared.ContentBlockTypeToolResult,
-		ToolUseID:   toolUseID,
-		Content:     data["content"],
-		IsError:     isError,
+		Type:      shared.ContentBlockTypeToolResult,
+		ToolUseID: toolUseID,
+		Content:   data["content"],
+		IsError:   isError,
 	}, nil
 }
 
