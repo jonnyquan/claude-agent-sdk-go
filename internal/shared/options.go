@@ -38,17 +38,27 @@ type Options struct {
 	PermissionPromptToolName *string         `json:"permission_prompt_tool_name,omitempty"`
 
 	// Session & State Management
-	ContinueConversation bool    `json:"continue_conversation,omitempty"`
-	Resume               *string `json:"resume,omitempty"`
-	MaxTurns             int     `json:"max_turns,omitempty"`
-	Settings             *string `json:"settings,omitempty"`
+	ContinueConversation   bool    `json:"continue_conversation,omitempty"`
+	Resume                 *string `json:"resume,omitempty"`
+	MaxTurns               int     `json:"max_turns,omitempty"`
+	Settings               *string `json:"settings,omitempty"`
+	IncludePartialMessages bool    `json:"include_partial_messages,omitempty"`
+	ForkSession            bool    `json:"fork_session,omitempty"`
 
 	// File System & Context
-	Cwd     *string  `json:"cwd,omitempty"`
-	AddDirs []string `json:"add_dirs,omitempty"`
+	Cwd            *string  `json:"cwd,omitempty"`
+	AddDirs        []string `json:"add_dirs,omitempty"`
+	User           *string  `json:"user,omitempty"`
+	SettingSources []string `json:"setting_sources,omitempty"`
 
 	// MCP Integration
-	McpServers map[string]McpServerConfig `json:"mcp_servers,omitempty"`
+	McpServers    map[string]McpServerConfig `json:"mcp_servers,omitempty"`
+	MaxBufferSize *int                       `json:"max_buffer_size,omitempty"`
+
+	// Hooks for intercepting and controlling SDK behavior
+	// Key: HookEvent type (e.g., "PreToolUse", "PostToolUse")
+	// Value: List of hook matchers with their callbacks
+	Hooks map[string][]any `json:"hooks,omitempty"`
 
 	// Extensibility
 	ExtraArgs map[string]*string `json:"extra_args,omitempty"`
@@ -59,6 +69,17 @@ type Options struct {
 
 	// CLI Path (for testing and custom installations)
 	CLIPath *string `json:"cli_path,omitempty"`
+
+	// Agents configuration for custom workflows.
+	Agents map[string]AgentDefinition `json:"agents,omitempty"`
+}
+
+// AgentDefinition configures a named agent available to the CLI.
+type AgentDefinition struct {
+	Description string   `json:"description"`
+	Prompt      string   `json:"prompt"`
+	Tools       []string `json:"tools,omitempty"`
+	Model       *string  `json:"model,omitempty"`
 }
 
 // McpServerType represents the type of MCP server.
@@ -139,6 +160,10 @@ func (o *Options) Validate() error {
 		}
 	}
 
+	if o.MaxBufferSize != nil && *o.MaxBufferSize <= 0 {
+		return fmt.Errorf("MaxBufferSize must be positive, got %d", *o.MaxBufferSize)
+	}
+
 	return nil
 }
 
@@ -150,6 +175,8 @@ func NewOptions() *Options {
 		MaxThinkingTokens: DefaultMaxThinkingTokens,
 		AddDirs:           []string{},
 		McpServers:        make(map[string]McpServerConfig),
+		Agents:            make(map[string]AgentDefinition),
+		Hooks:             make(map[string][]any),
 		ExtraArgs:         make(map[string]*string),
 		ExtraEnv:          make(map[string]string),
 	}

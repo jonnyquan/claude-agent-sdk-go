@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# Pre-push hook to run lint checks (matches CI workflow)
+
+echo "Running lint checks before push..."
+echo ""
+
+# Run golangci-lint
+echo "→ Running golangci-lint..."
+if command -v golangci-lint &> /dev/null; then
+    golangci-lint run ./...
+    if [ $? -ne 0 ]; then
+        echo ""
+        echo "❌ golangci-lint failed. Fix lint issues before pushing."
+        echo "   Run: golangci-lint run ./... --fix"
+        exit 1
+    fi
+else
+    echo "⚠️  golangci-lint not found, skipping lint check"
+    echo "   Install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+fi
+
+# Run go fmt check
+echo "→ Running go fmt check..."
+UNFORMATTED=$(gofmt -l .)
+if [ -n "$UNFORMATTED" ]; then
+    echo ""
+    echo "❌ go fmt check failed. The following files need formatting:"
+    echo "$UNFORMATTED"
+    echo "   Run: go fmt ./..."
+    exit 1
+fi
+
+# Run go vet
+echo "→ Running go vet..."
+go vet ./...
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ go vet failed. Fix issues before pushing."
+    exit 1
+fi
+
+echo ""
+echo "✓ All lint checks passed!"
+exit 0

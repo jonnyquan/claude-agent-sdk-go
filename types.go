@@ -36,6 +36,12 @@ type ToolUseBlock = shared.ToolUseBlock
 // ToolResultBlock represents a tool result content block.
 type ToolResultBlock = shared.ToolResultBlock
 
+// ImageBlock represents an image content block.
+type ImageBlock = shared.ImageBlock
+
+// AgentDefinition represents a custom agent configuration.
+type AgentDefinition = shared.AgentDefinition
+
 // StreamMessage represents a message in the streaming protocol.
 type StreamMessage = shared.StreamMessage
 
@@ -56,6 +62,7 @@ const (
 	ContentBlockTypeThinking   = shared.ContentBlockTypeThinking
 	ContentBlockTypeToolUse    = shared.ContentBlockTypeToolUse
 	ContentBlockTypeToolResult = shared.ContentBlockTypeToolResult
+	ContentBlockTypeImage      = shared.ContentBlockTypeImage
 )
 
 // Transport abstracts the communication layer with Claude Code CLI.

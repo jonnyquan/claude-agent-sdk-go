@@ -219,14 +219,19 @@ func (c *ClientImpl) Connect(ctx context.Context, _ ...StreamMessage) error {
 	if c.customTransport != nil {
 		c.transport = c.customTransport
 	} else {
-		// Create default subprocess transport directly (like Python SDK)
-		cliPath, err := cli.FindCLI()
-		if err != nil {
-			return fmt.Errorf("claude CLI not found: %w", err)
+		var cliPath string
+		if c.options != nil && c.options.CLIPath != nil && *c.options.CLIPath != "" {
+			cliPath = *c.options.CLIPath
+		} else {
+			var err error
+			cliPath, err = cli.FindCLI()
+			if err != nil {
+				return fmt.Errorf("claude CLI not found: %w", err)
+			}
 		}
 
 		// Create subprocess transport for streaming mode (closeStdin=false)
-		c.transport = subprocess.New(cliPath, c.options, false, "sdk-go-client")
+		c.transport = subprocess.New(cliPath, c.options, false, "sdk-go-client", Version)
 	}
 
 	// Connect the transport

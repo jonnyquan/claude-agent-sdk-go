@@ -18,6 +18,7 @@ const (
 	ContentBlockTypeThinking   = "thinking"
 	ContentBlockTypeToolUse    = "tool_use"
 	ContentBlockTypeToolResult = "tool_result"
+	ContentBlockTypeImage      = "image"
 )
 
 // Message represents any message type in the Claude Code protocol.
@@ -181,4 +182,16 @@ type ToolResultBlock struct {
 // BlockType returns the content block type for ToolResultBlock.
 func (b *ToolResultBlock) BlockType() string {
 	return ContentBlockTypeToolResult
+}
+
+// ImageBlock represents an image content block with base64 data.
+type ImageBlock struct {
+	MessageType string `json:"type"`
+	Data        string `json:"data"`     // Base64 encoded image data
+	MimeType    string `json:"mimeType"` // e.g., "image/png", "image/jpeg"
+}
+
+// BlockType returns the content block type for ImageBlock.
+func (b *ImageBlock) BlockType() string {
+	return ContentBlockTypeImage
 }

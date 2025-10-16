@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -117,6 +118,91 @@ func TestExtraArgsSupport(t *testing.T) {
 			cmd := BuildCommand("/usr/local/bin/claude", options, true)
 			test.validate(t, cmd)
 		})
+	}
+}
+
+func TestBuildCommandAdvancedFlags(t *testing.T) {
+	model := "claude-3-5-sonnet"
+	opts := &shared.Options{
+		IncludePartialMessages: true,
+		ForkSession:            true,
+		SettingSources:         []string{"user", "project"},
+		Agents: map[string]shared.AgentDefinition{
+			"analyst": {
+				Description: "Analysis agent",
+				Prompt:      "Analyze data",
+				Tools:       []string{"Read"},
+				Model:       &model,
+			},
+		},
+	}
+
+	cmd := BuildCommand("/usr/local/bin/claude", opts, false)
+
+	assertContainsArg(t, cmd, "--include-partial-messages")
+	assertContainsArg(t, cmd, "--fork-session")
+	assertContainsArgs(t, cmd, "--setting-sources", "user,project")
+
+	agentsJSON, ok := getFlagValue(cmd, "--agents")
+	if !ok {
+		t.Fatal("Expected --agents flag in command")
+	}
+
+	var payload map[string]map[string]interface{}
+	if err := json.Unmarshal([]byte(agentsJSON), &payload); err != nil {
+		t.Fatalf("Failed to unmarshal agents payload: %v", err)
+	}
+
+	agent, exists := payload["analyst"]
+	if !exists {
+		t.Fatalf("Expected analyst agent in payload: %v", payload)
+	}
+	if agent["description"] != "Analysis agent" {
+		t.Errorf("Unexpected agent description: %v", agent["description"])
+	}
+	if agent["prompt"] != "Analyze data" {
+		t.Errorf("Unexpected agent prompt: %v", agent["prompt"])
+	}
+}
+
+func TestBuildCommandWithMcpServers(t *testing.T) {
+	opts := &shared.Options{
+		McpServers: map[string]shared.McpServerConfig{
+			"file": &shared.McpStdioServerConfig{
+				Type:    shared.McpServerTypeStdio,
+				Command: "python",
+				Args:    []string{"server.py"},
+			},
+		},
+	}
+
+	cmd := BuildCommand("/usr/local/bin/claude", opts, false)
+
+	mcpJSON, ok := getFlagValue(cmd, "--mcp-config")
+	if !ok {
+		t.Fatal("Expected --mcp-config flag in command")
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(mcpJSON), &payload); err != nil {
+		t.Fatalf("Failed to unmarshal MCP payload: %v", err)
+	}
+
+	servers, ok := payload["mcpServers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected mcpServers object, got: %v", payload)
+	}
+
+	server, ok := servers["file"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected file server configuration, got: %v", servers)
+	}
+
+	if server["type"] != string(shared.McpServerTypeStdio) {
+		t.Errorf("Unexpected MCP server type: %v", server["type"])
+	}
+	if server["command"] != "python" {
+		t.Errorf("Unexpected MCP command: %v", server["command"])
 	}
 }
 
@@ -401,6 +487,18 @@ func assertContainsArgs(t *testing.T, args []string, flag, value string) {
 		}
 	}
 	t.Errorf("Expected command to contain %s %s, got %v", flag, value, args)
+}
+
+func getFlagValue(args []string, flag string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		if args[i] == flag {
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", false
+		}
+	}
+	return "", false
 }
 
 func assertNotContainsArgs(t *testing.T, args []string, flag, value string) {

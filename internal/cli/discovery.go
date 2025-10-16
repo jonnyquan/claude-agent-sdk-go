@@ -3,15 +3,20 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/shared"
 )
+
+// MinimumCLIVersion is the minimum required version of Claude Code CLI.
+const MinimumCLIVersion = "2.0.0"
 
 const windowsOS = "windows"
 
@@ -24,6 +29,10 @@ var DiscoveryPaths = []string{
 func FindCLI() (string, error) {
 	// 1. Check PATH first - most common case
 	if path, err := exec.LookPath("claude"); err == nil {
+		// Check version (warning only, don't fail)
+		if verErr := CheckCLIVersion(path); verErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", verErr)
+		}
 		return path, nil
 	}
 
@@ -37,6 +46,10 @@ func FindCLI() (string, error) {
 				if info.Mode()&0o111 == 0 {
 					continue // Not executable
 				}
+			}
+			// Check version (warning only, don't fail)
+			if verErr := CheckCLIVersion(location); verErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: %v\n", verErr)
 			}
 			return location, nil
 		}
@@ -140,6 +153,7 @@ func addOptionsToCommand(cmd []string, options *shared.Options) []string {
 	cmd = addSessionFlags(cmd, options)
 	cmd = addFileSystemFlags(cmd, options)
 	cmd = addMCPFlags(cmd, options)
+	cmd = addAdvancedFlags(cmd, options)
 	cmd = addExtraFlags(cmd, options)
 	return cmd
 }
@@ -209,9 +223,102 @@ func addFileSystemFlags(cmd []string, options *shared.Options) []string {
 	return cmd
 }
 
-func addMCPFlags(cmd []string, _ *shared.Options) []string {
-	// TODO: Implement MCP configuration file generation when len(options.McpServers) > 0
-	// For now, skip MCP servers - this will be added in a subsequent commit
+func addMCPFlags(cmd []string, options *shared.Options) []string {
+	if options == nil || len(options.McpServers) == 0 {
+		return cmd
+	}
+
+	servers := make(map[string]map[string]interface{})
+	for name, cfg := range options.McpServers {
+		if cfg == nil {
+			continue
+		}
+
+		switch server := cfg.(type) {
+		case *shared.McpStdioServerConfig:
+			payload := map[string]interface{}{
+				"type":    string(server.Type),
+				"command": server.Command,
+			}
+			if len(server.Args) > 0 {
+				payload["args"] = server.Args
+			}
+			if len(server.Env) > 0 {
+				payload["env"] = server.Env
+			}
+			servers[name] = payload
+		case *shared.McpSSEServerConfig:
+			payload := map[string]interface{}{
+				"type": string(server.Type),
+				"url":  server.URL,
+			}
+			if len(server.Headers) > 0 {
+				payload["headers"] = server.Headers
+			}
+			servers[name] = payload
+		case *shared.McpHTTPServerConfig:
+			payload := map[string]interface{}{
+				"type": string(server.Type),
+				"url":  server.URL,
+			}
+			if len(server.Headers) > 0 {
+				payload["headers"] = server.Headers
+			}
+			servers[name] = payload
+		default:
+			continue
+		}
+	}
+
+	if len(servers) == 0 {
+		return cmd
+	}
+
+	payload := map[string]interface{}{"mcpServers": servers}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return cmd
+	}
+
+	cmd = append(cmd, "--mcp-config", string(data))
+	return cmd
+}
+
+func addAdvancedFlags(cmd []string, options *shared.Options) []string {
+	if options.IncludePartialMessages {
+		cmd = append(cmd, "--include-partial-messages")
+	}
+	if options.ForkSession {
+		cmd = append(cmd, "--fork-session")
+	}
+	if len(options.SettingSources) > 0 {
+		cmd = append(cmd, "--setting-sources", strings.Join(options.SettingSources, ","))
+	}
+
+	if len(options.Agents) > 0 {
+		agentsPayload := make(map[string]map[string]interface{}, len(options.Agents))
+		for name, def := range options.Agents {
+			entry := map[string]interface{}{
+				"description": def.Description,
+				"prompt":      def.Prompt,
+			}
+			if len(def.Tools) > 0 {
+				entry["tools"] = def.Tools
+			}
+			if def.Model != nil && *def.Model != "" {
+				entry["model"] = *def.Model
+			}
+			agentsPayload[name] = entry
+		}
+
+		if len(agentsPayload) > 0 {
+			data, err := json.Marshal(agentsPayload)
+			if err == nil {
+				cmd = append(cmd, "--agents", string(data))
+			}
+		}
+	}
+
 	return cmd
 }
 
@@ -283,4 +390,68 @@ func DetectCLIVersion(ctx context.Context, cliPath string) (string, error) {
 	}
 
 	return version, nil
+}
+
+// CheckCLIVersion checks if the Claude Code CLI version meets the minimum requirement.
+func CheckCLIVersion(cliPath string) error {
+	// Allow skipping version check via environment variable
+	if os.Getenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK") != "" {
+		return nil
+	}
+
+	cmd := exec.Command(cliPath, "--version")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to check CLI version: %w", err)
+	}
+	
+	version := strings.TrimSpace(string(output))
+	// Version format: "claude-code/2.0.0" or just "2.0.0"
+	version = strings.TrimPrefix(version, "claude-code/")
+	version = strings.TrimPrefix(version, "v")
+	
+	if !isVersionSufficient(version, MinimumCLIVersion) {
+		return fmt.Errorf(
+			"Claude Code CLI version %s is below minimum required version %s. "+
+				"Please update:\n  npm install -g @anthropic-ai/claude-code",
+			version,
+			MinimumCLIVersion,
+		)
+	}
+	
+	return nil
+}
+
+// isVersionSufficient checks if current version >= required version.
+// Versions are expected in format "major.minor.patch".
+func isVersionSufficient(current, required string) bool {
+	currentParts := parseVersion(current)
+	requiredParts := parseVersion(required)
+	
+	for i := 0; i < 3; i++ {
+		if currentParts[i] > requiredParts[i] {
+			return true
+		}
+		if currentParts[i] < requiredParts[i] {
+			return false
+		}
+	}
+	
+	return true // Equal versions are sufficient
+}
+
+// parseVersion parses a semantic version string into [major, minor, patch].
+func parseVersion(version string) [3]int {
+	parts := strings.Split(version, ".")
+	var result [3]int
+	
+	for i := 0; i < 3 && i < len(parts); i++ {
+		// Extract numeric part only (handle cases like "2.0.0-beta")
+		numStr := strings.Split(parts[i], "-")[0]
+		if num, err := strconv.Atoi(numStr); err == nil {
+			result[i] = num
+		}
+	}
+	
+	return result
 }

@@ -43,6 +43,94 @@ func TestOptionsWithTools(t *testing.T) {
 	assertOptionsStringSlice(t, emptyOptions.DisallowedTools, []string{}, "DisallowedTools")
 }
 
+func TestIncludePartialMessagesOption(t *testing.T) {
+	options := NewOptions(WithIncludePartialMessages(true))
+	if !options.IncludePartialMessages {
+		t.Error("Expected IncludePartialMessages to be true")
+	}
+
+	options = NewOptions(WithIncludePartialMessages(false))
+	if options.IncludePartialMessages {
+		t.Error("Expected IncludePartialMessages to be false")
+	}
+}
+
+func TestForkSessionOption(t *testing.T) {
+	options := NewOptions(WithForkSession(true))
+	if !options.ForkSession {
+		t.Error("Expected ForkSession to be true")
+	}
+
+	options = NewOptions(WithForkSession(false))
+	if options.ForkSession {
+		t.Error("Expected ForkSession to be false")
+	}
+}
+
+func TestSettingSourcesOption(t *testing.T) {
+	options := NewOptions(WithSettingSources("user", "project"))
+	expected := []string{"user", "project"}
+	assertOptionsStringSlice(t, options.SettingSources, expected, "SettingSources")
+
+	options = NewOptions(WithSettingSources())
+	if options.SettingSources != nil {
+		t.Errorf("Expected SettingSources to be nil, got %v", options.SettingSources)
+	}
+}
+
+func TestAgentsOption(t *testing.T) {
+	agents := map[string]AgentDefinition{
+		"analyst": {
+			Description: "Analysis agent",
+			Prompt:      "Analyze",
+			Tools:       []string{"Read"},
+		},
+	}
+	options := NewOptions(WithAgents(agents))
+
+	if len(options.Agents) != 1 {
+		t.Fatalf("Expected one agent, got %d", len(options.Agents))
+	}
+
+	agent := options.Agents["analyst"]
+	if agent.Description != "Analysis agent" {
+		t.Errorf("Unexpected agent description: %s", agent.Description)
+	}
+	if agent.Prompt != "Analyze" {
+		t.Errorf("Unexpected agent prompt: %s", agent.Prompt)
+	}
+
+	// Ensure map is copied
+	agents["analyst"] = AgentDefinition{Description: "modified"}
+	if options.Agents["analyst"].Description != "Analysis agent" {
+		t.Error("Expected options agents map to be independent copy")
+	}
+}
+
+func TestUserOption(t *testing.T) {
+	options := NewOptions(WithUser("sdk-user"))
+	if options.User == nil || *options.User != "sdk-user" {
+		t.Errorf("Expected user to be sdk-user, got %v", options.User)
+	}
+
+	options = NewOptions(WithUser(""))
+	if options.User != nil {
+		t.Errorf("Expected user pointer to be nil, got %v", options.User)
+	}
+}
+
+func TestMaxBufferSizeOption(t *testing.T) {
+	options := NewOptions(WithMaxBufferSize(4096))
+	if options.MaxBufferSize == nil || *options.MaxBufferSize != 4096 {
+		t.Errorf("Expected MaxBufferSize to be 4096, got %v", options.MaxBufferSize)
+	}
+
+	options = NewOptions(WithMaxBufferSize(0))
+	if options.MaxBufferSize != nil {
+		t.Errorf("Expected MaxBufferSize to be nil, got %v", options.MaxBufferSize)
+	}
+}
+
 // T017: Permission Mode Options
 func TestPermissionModeOptions(t *testing.T) {
 	// Test all permission modes using table-driven approach
@@ -156,6 +244,18 @@ func TestFunctionalOptionsPattern(t *testing.T) {
 		WithAddDirs("/tmp/dir1", "/tmp/dir2"),
 		WithMaxThinkingTokens(10000),
 		WithPermissionPromptToolName("CustomPermissionTool"),
+		WithIncludePartialMessages(true),
+		WithForkSession(true),
+		WithSettingSources("user", "project"),
+		WithAgents(map[string]AgentDefinition{
+			"analyst": {
+				Description: "Performs analysis",
+				Prompt:      "Analyze data",
+				Tools:       []string{"Read"},
+			},
+		}),
+		WithMaxBufferSize(2048),
+		WithUser("sdk-user"),
 	)
 
 	// Verify all options are correctly applied
@@ -204,6 +304,28 @@ func TestFunctionalOptionsPattern(t *testing.T) {
 
 	if options.PermissionPromptToolName == nil || *options.PermissionPromptToolName != "CustomPermissionTool" {
 		t.Errorf("Expected PermissionPromptToolName = %q, got %v", "CustomPermissionTool", options.PermissionPromptToolName)
+	}
+
+	if !options.IncludePartialMessages {
+		t.Error("Expected IncludePartialMessages to be true")
+	}
+
+	if !options.ForkSession {
+		t.Error("Expected ForkSession to be true")
+	}
+
+	assertOptionsStringSlice(t, options.SettingSources, []string{"user", "project"}, "SettingSources")
+
+	if options.Agents == nil || len(options.Agents) != 1 {
+		t.Errorf("Expected Agents map to contain entries, got %v", options.Agents)
+	}
+
+	if options.MaxBufferSize == nil || *options.MaxBufferSize != 2048 {
+		t.Errorf("Expected MaxBufferSize to be 2048, got %v", options.MaxBufferSize)
+	}
+
+	if options.User == nil || *options.User != "sdk-user" {
+		t.Errorf("Expected User to be sdk-user, got %v", options.User)
 	}
 }
 

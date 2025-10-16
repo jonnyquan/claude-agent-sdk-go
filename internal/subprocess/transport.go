@@ -17,6 +17,7 @@ import (
 
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/cli"
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/parser"
+	"github.com/jonnyquan/claude-agent-sdk-go/internal/query"
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/shared"
 )
 
@@ -38,6 +39,7 @@ type Transport struct {
 	closeStdin bool
 	promptArg  *string // For one-shot queries, prompt passed as CLI argument
 	entrypoint string  // CLAUDE_CODE_ENTRYPOINT value (sdk-go or sdk-go-client)
+	sdkVersion string  // CLAUDE_AGENT_SDK_VERSION value
 
 	// Connection state
 	connected bool
@@ -55,6 +57,11 @@ type Transport struct {
 	msgChan chan shared.Message
 	errChan chan error
 
+	// Hook and control protocol support
+	controlProtocol *query.ControlProtocol
+	hookProcessor   *query.HookProcessor
+	isStreamingMode bool
+
 	// Control and cleanup
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -62,23 +69,25 @@ type Transport struct {
 }
 
 // New creates a new subprocess transport.
-func New(cliPath string, options *shared.Options, closeStdin bool, entrypoint string) *Transport {
+func New(cliPath string, options *shared.Options, closeStdin bool, entrypoint string, sdkVersion string) *Transport {
 	return &Transport{
 		cliPath:    cliPath,
 		options:    options,
 		closeStdin: closeStdin,
 		entrypoint: entrypoint,
+		sdkVersion: sdkVersion,
 		parser:     parser.New(),
 	}
 }
 
 // NewWithPrompt creates a new subprocess transport for one-shot queries with prompt as CLI argument.
-func NewWithPrompt(cliPath string, options *shared.Options, prompt string) *Transport {
+func NewWithPrompt(cliPath string, options *shared.Options, prompt string, sdkVersion string) *Transport {
 	return &Transport{
 		cliPath:    cliPath,
 		options:    options,
 		closeStdin: true,
 		entrypoint: "sdk-go", // Query mode uses sdk-go
+		sdkVersion: sdkVersion,
 		parser:     parser.New(),
 		promptArg:  &prompt,
 	}
@@ -117,6 +126,9 @@ func (t *Transport) Connect(ctx context.Context) error {
 
 	// Add SDK identifier (required)
 	env = append(env, "CLAUDE_CODE_ENTRYPOINT="+t.entrypoint)
+	if t.sdkVersion != "" {
+		env = append(env, fmt.Sprintf("CLAUDE_AGENT_SDK_VERSION=%s", t.sdkVersion))
+	}
 
 	// Merge custom environment variables
 	if t.options != nil && t.options.ExtraEnv != nil {
@@ -186,6 +198,34 @@ func (t *Transport) Connect(ctx context.Context) error {
 	// Note: Do NOT close stdin here for one-shot mode
 	// The CLI still needs stdin to receive the message, even with --print flag
 	// stdin will be closed after sending the message in SendMessage()
+
+	// Initialize hook support for streaming mode
+	t.isStreamingMode = !t.closeStdin && t.promptArg == nil
+	if t.isStreamingMode && t.options != nil && len(t.options.Hooks) > 0 {
+		// Create hook processor
+		t.hookProcessor = query.NewHookProcessor(t.ctx, t.options)
+		
+		// Create write function for control protocol
+		writeFn := func(data []byte) error {
+			t.mu.RLock()
+			defer t.mu.RUnlock()
+			
+			if !t.connected || t.stdin == nil {
+				return fmt.Errorf("transport not connected")
+			}
+			
+			_, err := t.stdin.Write(data)
+			return err
+		}
+		
+		// Create control protocol handler
+		t.controlProtocol = query.NewControlProtocol(t.ctx, t.hookProcessor, writeFn)
+		
+		// Send initialization request to CLI
+		if _, err := t.controlProtocol.Initialize(); err != nil {
+			return fmt.Errorf("failed to initialize control protocol: %w", err)
+		}
+	}
 
 	t.connected = true
 	return nil
@@ -280,6 +320,13 @@ func (t *Transport) Close() error {
 
 	t.connected = false
 
+	// Clean up control protocol
+	if t.controlProtocol != nil {
+		_ = t.controlProtocol.Close()
+		t.controlProtocol = nil
+		t.hookProcessor = nil
+	}
+
 	// Cancel context to stop goroutines
 	if t.cancel != nil {
 		t.cancel()
@@ -359,7 +406,30 @@ func (t *Transport) handleStdout() {
 			continue
 		}
 
-		// Parse line with the parser
+		// Check if this is a control message and route accordingly
+		if t.controlProtocol != nil {
+			// Try to parse as JSON to check message type
+			var rawMsg map[string]any
+			if err := json.Unmarshal([]byte(line), &rawMsg); err == nil {
+				if msgType, ok := rawMsg["type"].(string); ok {
+					// Route control messages to control protocol
+					switch msgType {
+					case "control_request", "control_response", "control_cancel_request":
+						if err := t.controlProtocol.HandleIncomingMessage(msgType, []byte(line)); err != nil {
+							// Log error but don't stop processing
+							select {
+							case t.errChan <- fmt.Errorf("control protocol error: %w", err):
+							case <-t.ctx.Done():
+								return
+							}
+						}
+						continue // Don't send control messages to regular message channel
+					}
+				}
+			}
+		}
+
+		// Parse line with the parser (normal messages)
 		messages, err := t.parser.ProcessLine(line)
 		if err != nil {
 			select {

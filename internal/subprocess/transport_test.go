@@ -489,10 +489,12 @@ func setupTransportTestContext(t *testing.T, timeout time.Duration) (context.Con
 	return context.WithTimeout(context.Background(), timeout)
 }
 
+const testSDKVersion = "test-version"
+
 func setupTransportForTest(t *testing.T, cliPath string) *Transport {
 	t.Helper()
 	options := &shared.Options{}
-	return New(cliPath, options, false, "sdk-go")
+	return New(cliPath, options, false, "sdk-go", testSDKVersion)
 }
 
 func connectTransportSafely(ctx context.Context, t *testing.T, transport *Transport) {
@@ -539,7 +541,7 @@ func TestNewWithPrompt(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			transport := NewWithPrompt("/usr/bin/claude", test.options, test.prompt)
+			transport := NewWithPrompt("/usr/bin/claude", test.options, test.prompt, testSDKVersion)
 
 			if transport == nil {
 				t.Fatal("Expected transport to be created, got nil")
@@ -583,7 +585,7 @@ func TestTransportConnectErrorPaths(t *testing.T) {
 			name: "invalid_working_directory",
 			setup: func() *Transport {
 				options := &shared.Options{Cwd: stringPtr("/nonexistent/directory/path")}
-				return New(newTransportMockCLI(), options, false, "sdk-go")
+				return New(newTransportMockCLI(), options, false, "sdk-go", testSDKVersion)
 			},
 			wantError: true,
 		},
@@ -618,7 +620,7 @@ func TestTransportSendMessageEdgeCases(t *testing.T) {
 
 	// Test SendMessage with promptArg transport (one-shot mode)
 	t.Run("send_message_with_prompt_arg", func(t *testing.T) {
-		transport := NewWithPrompt(newTransportMockCLI(), &shared.Options{}, "test prompt")
+		transport := NewWithPrompt(newTransportMockCLI(), &shared.Options{}, "test prompt", testSDKVersion)
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -856,6 +858,7 @@ func TestSubprocessEnvironmentVariables(t *testing.T) {
 				assertEnvContains(t, env, "TEST_VAR=test_value")
 				assertEnvContains(t, env, "DEBUG=1")
 				assertEnvContains(t, env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
+				assertEnvContains(t, env, "CLAUDE_AGENT_SDK_VERSION="+testSDKVersion)
 			},
 		},
 		{
@@ -896,6 +899,7 @@ func TestSubprocessEnvironmentVariables(t *testing.T) {
 
 				assertEnvContains(t, env, "CUSTOM=value")
 				assertEnvContains(t, env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
+				assertEnvContains(t, env, "CLAUDE_AGENT_SDK_VERSION="+testSDKVersion)
 			},
 		},
 		{
@@ -905,6 +909,7 @@ func TestSubprocessEnvironmentVariables(t *testing.T) {
 			},
 			validate: func(t *testing.T, env []string) {
 				assertEnvContains(t, env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
+				assertEnvContains(t, env, "CLAUDE_AGENT_SDK_VERSION="+testSDKVersion)
 			},
 		},
 		{
@@ -914,6 +919,7 @@ func TestSubprocessEnvironmentVariables(t *testing.T) {
 			},
 			validate: func(t *testing.T, env []string) {
 				assertEnvContains(t, env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
+				assertEnvContains(t, env, "CLAUDE_AGENT_SDK_VERSION="+testSDKVersion)
 			},
 		},
 		{
@@ -930,6 +936,7 @@ func TestSubprocessEnvironmentVariables(t *testing.T) {
 				assertEnvContains(t, env, "HTTPS_PROXY=http://proxy.example.com:8080")
 				assertEnvContains(t, env, "NO_PROXY=localhost,127.0.0.1")
 				assertEnvContains(t, env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
+				assertEnvContains(t, env, "CLAUDE_AGENT_SDK_VERSION="+testSDKVersion)
 			},
 		},
 	}
@@ -940,7 +947,7 @@ func TestSubprocessEnvironmentVariables(t *testing.T) {
 			defer cancel()
 
 			// Create transport with test options
-			transport := New("echo", tt.options, true, "sdk-go")
+			transport := New("echo", tt.options, true, "sdk-go", testSDKVersion)
 			defer func() {
 				if transport.IsConnected() {
 					_ = transport.Close()

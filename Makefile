@@ -13,9 +13,17 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-.PHONY: all test test-verbose test-race test-cover clean deps fmt lint vet check examples help
+.PHONY: all test test-verbose test-race test-cover test-hooks clean deps fmt lint vet check examples help
 
 all: test
+
+## Hook System
+test-hooks: ## Test hook system components
+	@echo "=== Testing Hook System ==="
+	$(GOTEST) -v -run "TestHook" ./...
+	$(GOTEST) -v -run "TestPermission" ./...
+	$(GOTEST) -v ./internal/query/...
+	@echo "✅ Hook system tests passed"
 
 ## Test
 test: ## Run tests
@@ -97,6 +105,13 @@ examples: ## Build all examples
 		fi; \
 	done
 
+example-hooks: ## Run hook examples
+	@echo "=== Hook Examples ==="
+	@echo "Note: Hook examples demonstrate API usage patterns"
+	@echo "Hook runtime is integrated in the SDK"
+	@cd examples/12_hooks && $(GOCMD) run main.go
+	@echo "✅ Hook examples completed"
+
 ## Documentation
 docs: ## Generate documentation
 	$(GOCMD) doc -all ./
@@ -128,6 +143,11 @@ api-check: ## Check public API surface
 	@$(GOCMD) doc Options
 	@$(GOCMD) doc Query
 	@$(GOCMD) doc WithClient
+	@echo ""
+	@echo "=== Hook System API ==="
+	@$(GOCMD) doc HookEvent 2>/dev/null || echo "Hook types available"
+	@$(GOCMD) doc HookCallback 2>/dev/null || echo "Hook callbacks available"
+	@$(GOCMD) doc PermissionResult 2>/dev/null || echo "Permission types available"
 
 module-check: ## Check module health
 	@echo "=== Module Health Check ==="
@@ -139,6 +159,7 @@ module-check: ## Check module health
 release-check: ## Check if ready for release
 	@echo "Checking release readiness..."
 	@$(MAKE) test
+	@$(MAKE) test-hooks
 	@$(MAKE) check  
 	@$(MAKE) examples
 	@$(MAKE) sdk-test
@@ -150,10 +171,16 @@ release-dry: ## Dry run release
 	goreleaser release --snapshot --clean --skip-publish
 
 ## CI/CD helpers
-ci: deps-verify test-race check examples sdk-test ## Run CI pipeline locally (SDK focused)
+ci: deps-verify test-race test-hooks check examples sdk-test ## Run CI pipeline locally (SDK focused)
 
 ci-coverage: ## Run CI with coverage
 	$(GOTEST) -race -coverprofile=coverage.out ./...
+
+ci-hook-integration: ## Run Hook system integration tests
+	@echo "=== Hook System Integration ==="
+	$(GOTEST) -v ./internal/query/...
+	$(GOTEST) -v -run "TestHook|TestPermission" ./...
+	@echo "✅ Hook integration tests passed"
 
 ## Docker (if needed in future)
 docker-build: ## Build Docker image

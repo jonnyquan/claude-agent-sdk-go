@@ -34,12 +34,13 @@ go get github.com/jonnyquan/claude-agent-sdk-go
 ## Key Features
 
 **Two APIs for different needs** - Query for automation, Client for interaction
-**100% Python SDK compatibility** - Same functionality, Go-native design
+**100% Python SDK compatibility** - Same functionality, Go-native design (including Hook system)
+**Hook system** - Intercept and control tool execution with custom callbacks
 **Automatic resource management** - WithClient provides Go-idiomatic context manager pattern
 **Session management** - Isolated conversation contexts with `Query()` and `QueryWithSession()`
 **Built-in tool integration** - File operations, AWS, GitHub, databases, and more
 **Production ready** - Comprehensive error handling, timeouts, resource cleanup
-**Security focused** - Granular tool permissions and access controls
+**Security focused** - Granular tool permissions, access controls, and runtime hooks
 **Context-aware** - Maintain conversation state across multiple interactions  
 
 ## Usage
@@ -253,6 +254,84 @@ func traditionalClientExample() {
 ```
 </details>
 
+## Hook System - Runtime Control & Interception
+
+**New in v0.3.0**: Control and intercept tool execution with custom hooks (compatible with Python SDK v0.1.3):
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "strings"
+    
+    "github.com/jonnyquan/claude-agent-sdk-go"
+)
+
+func main() {
+    ctx := context.Background()
+    
+    // Define security hook
+    securityHook := func(input claudecode.HookInput, toolUseID *string, ctx claudecode.HookContext) (claudecode.HookJSONOutput, error) {
+        toolName := input["tool_name"].(string)
+        
+        if toolName == "Bash" {
+            command := input["tool_input"].(map[string]any)["command"].(string)
+            
+            // Block dangerous commands
+            if strings.Contains(command, "rm -rf") {
+                return claudecode.NewBlockingOutput(
+                    "Blocked dangerous command",
+                    "Security policy violation",
+                ), nil
+            }
+        }
+        
+        // Allow safe commands
+        return claudecode.NewPreToolUseOutput(
+            claudecode.PermissionDecisionAllow, "", nil,
+        ), nil
+    }
+    
+    // Use hook with query
+    err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
+        return client.Query(ctx, "List files in current directory")
+    },
+        // Attach hook to intercept Bash tool usage
+        claudecode.WithHook(claudecode.HookEventPreToolUse, claudecode.HookMatcher{
+            Matcher: "Bash",
+            Hooks:   []claudecode.HookCallback{securityHook},
+        }),
+    )
+    
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+    }
+}
+```
+
+**Hook capabilities:**
+- **PreToolUse**: Intercept before tool execution, modify inputs, block dangerous operations
+- **PostToolUse**: Process tool outputs, log results, transform responses
+- **UserPromptSubmit**: Validate and transform user inputs
+- **Stop/SubagentStop**: Handle completion events
+- **PreCompact**: Manage context before compaction
+
+**Common use cases:**
+```go
+// Security enforcement
+claudecode.WithHook(claudecode.HookEventPreToolUse, securityHook)
+
+// Audit logging
+claudecode.WithHook(claudecode.HookEventPostToolUse, auditHook)
+
+// Input validation
+claudecode.WithHook(claudecode.HookEventUserPromptSubmit, validationHook)
+```
+
+See [`examples/12_hooks/`](examples/12_hooks/) for comprehensive hook examples including security policies, audit logging, and custom workflows.
+
 ## Tool Integration & External Services
 
 Integrate with file systems, cloud services, databases, and development tools:
@@ -312,6 +391,23 @@ claudecode.Query(ctx, prompt,
     claudecode.WithAddDirs("src", "docs"))
 ```
 
+**Hook Integration** (new in v0.3.0):
+```go
+// Attach hooks to control tool execution
+claudecode.WithClient(ctx, func(client claudecode.Client) error {
+    return client.Query(ctx, "Run system commands")
+},
+    claudecode.WithHook(claudecode.HookEventPreToolUse, claudecode.HookMatcher{
+        Matcher: "Bash",
+        Hooks:   []claudecode.HookCallback{securityHook},
+    }),
+    claudecode.WithHook(claudecode.HookEventPostToolUse, claudecode.HookMatcher{
+        Matcher: "*", // All tools
+        Hooks:   []claudecode.HookCallback{auditHook},
+    }),
+)
+```
+
 **Session Management** (Client API):
 ```go
 // WithClient provides isolated session contexts
@@ -363,9 +459,78 @@ Comprehensive examples covering every use case:
 **Advanced Patterns:**
 - [`examples/08_client_advanced/`](examples/08_client_advanced/) - WithClient error handling and production patterns
 - [`examples/09_client_vs_query/`](examples/09_client_vs_query/) - Modern API comparison and guidance
+- [`examples/12_hooks/`](examples/12_hooks/) - **NEW**: Hook system with security, audit, and custom workflows
 
 **📖 [Full Documentation](examples/README.md)** with usage patterns, security best practices, and troubleshooting.
 
+## Version History
+
+### v0.3.0 (Latest)
+- **Hook System**: Complete implementation compatible with Python SDK v0.1.3
+  - PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact hooks
+  - Permission control with Allow/Deny/Ask decisions
+  - Runtime interception and control of tool execution
+- **Security**: Custom security policies via hooks
+- **Audit**: Complete audit logging capabilities
+- **Examples**: Comprehensive hook examples in `examples/12_hooks/`
+
+### v0.2.5
+- Environment variable support (`WithEnv`, `WithEnvVar`)
+- Proxy configuration
+- Working directory and context management
+
+### v0.2.0
+- Client API with `WithClient` pattern
+- Session management
+- Streaming support
+
+### v0.1.0
+- Initial release with Query API
+- Core tool integration
+- Basic MCP support
+
+## Development
+
+### Testing
+
+```bash
+# Run all tests
+make test
+
+# Test hook system
+make test-hooks
+
+# Run hook examples
+make example-hooks
+
+# Full CI pipeline
+make ci
+```
+
+### Building Examples
+
+```bash
+# Build all examples
+make examples
+
+# Run specific hook example
+cd examples/12_hooks && go run main.go
+```
+
+See [`Makefile`](Makefile) for complete list of build targets.
+
+## Development
+
+If you're contributing to this project, run the initial setup script to install git hooks:
+
+```bash
+./scripts/initial-setup.sh
+```
+
+This installs a pre-push hook that runs lint checks before pushing, matching the CI workflow. To skip the hook temporarily, use `git push --no-verify`.
+
 ## License
 
-MIT
+MIT - See [LICENSE](LICENSE) for details.
+
+Includes Hook System implementation (2025) maintaining compatibility with Python Claude Agent SDK v0.1.3.
