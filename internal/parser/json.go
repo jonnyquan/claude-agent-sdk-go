@@ -4,11 +4,26 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"sync"
 
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/shared"
 )
+
+// isDebugMode checks if ANTHROPIC_LOG is set to "debug"
+var isDebugMode = func() bool {
+	logLevel := os.Getenv("ANTHROPIC_LOG")
+	return strings.ToLower(logLevel) == "debug"
+}()
+
+// debugLog prints log only when ANTHROPIC_LOG=debug
+func debugLog(format string, args ...interface{}) {
+	if isDebugMode {
+		log.Printf(format, args...)
+	}
+}
 
 const (
 	// MaxBufferSize is the maximum buffer size to prevent memory exhaustion (1MB).
@@ -36,10 +51,18 @@ func (p *Parser) ProcessLine(line string) ([]shared.Message, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// ✅ FIX: Reset buffer at the start of each ProcessLine call
+	// This ensures clean state and prevents buffer accumulation across multiple calls
+	p.buffer.Reset()
+	debugLog("[SDK-Parser] 🧹 Buffer reset at ProcessLine start")
+
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return nil, nil
 	}
+
+	// Debug: Log raw CLI output
+	debugLog("[SDK-Parser] 📥 Raw CLI line: %s", line)
 
 	var messages []shared.Message
 
@@ -61,32 +84,57 @@ func (p *Parser) ProcessLine(line string) ([]shared.Message, error) {
 		}
 	}
 
+	// Debug: Log parsed messages
+	debugLog("[SDK-Parser] 📤 Parsed %d message(s) from line", len(messages))
+	for i, msg := range messages {
+		debugLog("[SDK-Parser]   Message #%d: type=%T", i, msg)
+	}
+
 	return messages, nil
 }
 
 // ParseMessage parses a raw JSON object into the appropriate Message type.
 // Implements type discrimination based on the "type" field.
 func (p *Parser) ParseMessage(data map[string]any) (shared.Message, error) {
+	// Debug: Log raw data structure
+	dataJSON, _ := json.Marshal(data)
+	debugLog("[SDK-Parser] 🔍 ParseMessage input: %s", string(dataJSON))
+
 	msgType, ok := data["type"].(string)
 	if !ok {
 		return nil, shared.NewMessageParseError("missing or invalid type field", data)
 	}
 
+	debugLog("[SDK-Parser] 🔍 Message type: %s", msgType)
+
+	var msg shared.Message
+	var err error
+
 	switch msgType {
 	case shared.MessageTypeUser:
-		return p.parseUserMessage(data)
+		msg, err = p.parseUserMessage(data)
 	case shared.MessageTypeAssistant:
-		return p.parseAssistantMessage(data)
+		msg, err = p.parseAssistantMessage(data)
 	case shared.MessageTypeSystem:
-		return p.parseSystemMessage(data)
+		msg, err = p.parseSystemMessage(data)
 	case shared.MessageTypeResult:
-		return p.parseResultMessage(data)
+		msg, err = p.parseResultMessage(data)
 	default:
 		return nil, shared.NewMessageParseError(
 			fmt.Sprintf("unknown message type: %s", msgType),
 			data,
 		)
 	}
+
+	// Debug: Log parsed result
+	if err != nil {
+		debugLog("[SDK-Parser] ❌ ParseMessage error: %v", err)
+	} else if msg != nil {
+		parsedJSON, _ := json.Marshal(msg)
+		debugLog("[SDK-Parser] ✅ ParseMessage output: %s", string(parsedJSON))
+	}
+
+	return msg, err
 }
 
 // Reset clears the internal buffer.
@@ -115,7 +163,11 @@ func (p *Parser) processJSONLine(jsonLine string) (shared.Message, error) {
 // processJSONLineUnlocked is the unlocked version of processJSONLine.
 // Must be called with mutex already held.
 func (p *Parser) processJSONLineUnlocked(jsonLine string) (shared.Message, error) {
+	debugLog("[SDK-Parser] 🔧 processJSONLineUnlocked: input length=%d", len(jsonLine))
+	debugLog("[SDK-Parser] 🔧 Buffer before: length=%d", p.buffer.Len())
+	
 	p.buffer.WriteString(jsonLine)
+	debugLog("[SDK-Parser] 🔧 Buffer after write: length=%d", p.buffer.Len())
 
 	// Check buffer size limit
 	if p.buffer.Len() > p.maxBufferSize {
@@ -131,20 +183,25 @@ func (p *Parser) processJSONLineUnlocked(jsonLine string) (shared.Message, error
 	// Attempt speculative JSON parsing
 	var rawData map[string]any
 	bufferContent := p.buffer.String()
+	debugLog("[SDK-Parser] 🔧 Attempting to unmarshal buffer content (length=%d)", len(bufferContent))
 
 	if err := json.Unmarshal([]byte(bufferContent), &rawData); err != nil {
 		// JSON is incomplete - continue accumulating
 		// This is NOT an error condition in speculative parsing!
+		debugLog("[SDK-Parser] 🔧 JSON Unmarshal failed (incomplete): %v", err)
 		return nil, nil
 	}
 
 	// Successfully parsed complete JSON - reset buffer and parse message
+	debugLog("[SDK-Parser] 🔧 JSON Unmarshal succeeded, resetting buffer and parsing message")
 	p.buffer.Reset()
 	return p.ParseMessage(rawData)
 }
 
 // parseUserMessage parses a user message from raw JSON data.
 func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, error) {
+	debugLog("[SDK-Parser] 👤 Parsing UserMessage...")
+
 	messageData, ok := data["message"].(map[string]any)
 	if !ok {
 		return nil, shared.NewMessageParseError("user message missing message field", data)
@@ -154,16 +211,19 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 	if content == nil {
 		return nil, shared.NewMessageParseError("user message missing content field", data)
 	}
+	debugLog("[SDK-Parser] 👤 UserMessage content type: %T", content)
 
 	// Handle both string content and array of content blocks
 	switch c := content.(type) {
 	case string:
 		// String content - create directly
+		debugLog("[SDK-Parser] 👤 UserMessage has string content: %q", c)
 		return &shared.UserMessage{
 			Content: c,
 		}, nil
 	case []any:
 		// Array of content blocks
+		debugLog("[SDK-Parser] 👤 UserMessage has %d content block(s)", len(c))
 		blocks := make([]shared.ContentBlock, len(c))
 		for i, blockData := range c {
 			block, err := p.parseContentBlock(blockData)
@@ -171,6 +231,7 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 				return nil, fmt.Errorf("failed to parse content block %d: %w", i, err)
 			}
 			blocks[i] = block
+			debugLog("[SDK-Parser] 👤   Block #%d: type=%T", i, block)
 		}
 		return &shared.UserMessage{
 			Content: blocks,
@@ -182,6 +243,8 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 
 // parseAssistantMessage parses an assistant message from raw JSON data.
 func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMessage, error) {
+	debugLog("[SDK-Parser] 🤖 Parsing AssistantMessage...")
+
 	messageData, ok := data["message"].(map[string]any)
 	if !ok {
 		return nil, shared.NewMessageParseError("assistant message missing message field", data)
@@ -191,11 +254,13 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 	if !ok {
 		return nil, shared.NewMessageParseError("assistant message content must be array", data)
 	}
+	debugLog("[SDK-Parser] 🤖 AssistantMessage has %d content block(s)", len(contentArray))
 
 	model, ok := messageData["model"].(string)
 	if !ok {
 		return nil, shared.NewMessageParseError("assistant message missing model field", data)
 	}
+	debugLog("[SDK-Parser] 🤖 AssistantMessage model: %s", model)
 
 	blocks := make([]shared.ContentBlock, len(contentArray))
 	for i, blockData := range contentArray {
@@ -204,8 +269,10 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 			return nil, fmt.Errorf("failed to parse content block %d: %w", i, err)
 		}
 		blocks[i] = block
+		debugLog("[SDK-Parser] 🤖   Block #%d: type=%T", i, block)
 	}
 
+	debugLog("[SDK-Parser] 🤖 AssistantMessage parsed successfully")
 	return &shared.AssistantMessage{
 		Content: blocks,
 		Model:   model,
@@ -227,6 +294,8 @@ func (p *Parser) parseSystemMessage(data map[string]any) (*shared.SystemMessage,
 
 // parseResultMessage parses a result message from raw JSON data.
 func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage, error) {
+	debugLog("[SDK-Parser] ✅ Parsing ResultMessage...")
+
 	result := &shared.ResultMessage{}
 
 	// Required fields with validation
@@ -281,6 +350,8 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 		}
 	}
 
+	debugLog("[SDK-Parser] ✅ ResultMessage parsed: subtype=%s, session_id=%s, is_error=%v", 
+		result.Subtype, result.SessionID, result.IsError)
 	return result, nil
 }
 
