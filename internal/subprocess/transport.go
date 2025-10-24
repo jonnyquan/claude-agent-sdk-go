@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -28,6 +29,10 @@ const (
 	terminationTimeoutSeconds = 5
 	// windowsOS is the GOOS value for Windows platform.
 	windowsOS = "windows"
+	// cmdLengthLimitWindows is the command line length limit for Windows (cmd.exe has 8191 char limit)
+	cmdLengthLimitWindows = 8000
+	// cmdLengthLimitOther is the command line length limit for other platforms
+	cmdLengthLimitOther = 100000
 )
 
 // Transport implements the Transport interface using subprocess communication.
@@ -63,9 +68,10 @@ type Transport struct {
 	isStreamingMode bool
 
 	// Control and cleanup
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	tempFiles []string // Track temporary files for cleanup
 }
 
 // New creates a new subprocess transport.
@@ -118,6 +124,12 @@ func (t *Transport) Connect(ctx context.Context) error {
 		// Streaming mode or regular one-shot
 		args = cli.BuildCommand(t.cliPath, t.options, t.closeStdin)
 	}
+
+	// Handle command line length limits (Windows compatibility)
+	if err := t.handleCommandLineLength(&args); err != nil {
+		return fmt.Errorf("failed to handle command line length: %w", err)
+	}
+
 	//nolint:gosec // G204: This is the core CLI SDK functionality - subprocess execution is required
 	t.cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 
@@ -315,6 +327,11 @@ func (t *Transport) Close() error {
 	defer t.mu.Unlock()
 
 	if !t.connected {
+		// Clean up temp files even if already closed
+		for _, tempFile := range t.tempFiles {
+			_ = os.Remove(tempFile)
+		}
+		t.tempFiles = nil
 		return nil // Already closed
 	}
 
@@ -531,8 +548,87 @@ func (t *Transport) terminateProcess() error {
 	}
 }
 
+// handleCommandLineLength checks command line length and uses temp files if needed (Windows compatibility)
+func (t *Transport) handleCommandLineLength(args *[]string) error {
+	// Calculate command line length
+	cmdStr := strings.Join(*args, " ")
+	cmdLength := len(cmdStr)
+
+	// Determine limit based on platform
+	limit := cmdLengthLimitOther
+	if runtime.GOOS == windowsOS {
+		limit = cmdLengthLimitWindows
+	}
+
+	// Check if command exceeds limit
+	if cmdLength <= limit {
+		return nil // No action needed
+	}
+
+	// Command is too long - find --agents argument and move to temp file
+	// This only applies if we have agents configured
+	if t.options == nil || len(t.options.Agents) == 0 {
+		return nil // No agents to optimize
+	}
+
+	// Find --agents flag index
+	agentsIdx := -1
+	for i, arg := range *args {
+		if arg == "--agents" && i+1 < len(*args) {
+			agentsIdx = i
+			break
+		}
+	}
+
+	if agentsIdx == -1 {
+		// No --agents flag found, can't optimize
+		return fmt.Errorf("command line length (%d) exceeds limit (%d) but no --agents flag found to optimize", cmdLength, limit)
+	}
+
+	// Get agents JSON value
+	agentsJSON := (*args)[agentsIdx+1]
+
+	// Create temporary file
+	tempFile, err := os.CreateTemp("", "claude-agents-*.json")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer tempFile.Close()
+
+	// Write agents JSON to temp file
+	if _, err := tempFile.WriteString(agentsJSON); err != nil {
+		_ = os.Remove(tempFile.Name())
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	// Get absolute path
+	absPath, err := filepath.Abs(tempFile.Name())
+	if err != nil {
+		_ = os.Remove(tempFile.Name())
+		return fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	// Track temp file for cleanup
+	t.tempFiles = append(t.tempFiles, absPath)
+
+	// Replace agents JSON with @filepath reference
+	(*args)[agentsIdx+1] = "@" + absPath
+
+	// Log the optimization
+	fmt.Fprintf(os.Stderr, "Command line length (%d) exceeds limit (%d). Using temp file for --agents: %s\n",
+		cmdLength, limit, absPath)
+
+	return nil
+}
+
 // cleanup cleans up all resources
 func (t *Transport) cleanup() {
+	// Clean up temporary files first
+	for _, tempFile := range t.tempFiles {
+		_ = os.Remove(tempFile)
+	}
+	t.tempFiles = nil
+
 	if t.stdout != nil {
 		_ = t.stdout.Close()
 		t.stdout = nil
