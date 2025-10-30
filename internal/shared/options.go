@@ -72,6 +72,9 @@ type Options struct {
 
 	// Agents configuration for custom workflows.
 	Agents map[string]AgentDefinition `json:"agents,omitempty"`
+
+	// Plugins configuration for custom plugins.
+	Plugins []PluginConfig `json:"plugins,omitempty"`
 }
 
 // AgentDefinition configures a named agent available to the CLI.
@@ -80,6 +83,20 @@ type AgentDefinition struct {
 	Prompt      string   `json:"prompt"`
 	Tools       []string `json:"tools,omitempty"`
 	Model       *string  `json:"model,omitempty"`
+}
+
+// PluginType represents the type of plugin.
+type PluginType string
+
+const (
+	// PluginTypeLocal represents a local filesystem plugin.
+	PluginTypeLocal PluginType = "local"
+)
+
+// PluginConfig represents plugin configuration.
+type PluginConfig struct {
+	Type PluginType `json:"type"`
+	Path string     `json:"path"`
 }
 
 // McpServerType represents the type of MCP server.
@@ -92,6 +109,8 @@ const (
 	McpServerTypeSSE McpServerType = "sse"
 	// McpServerTypeHTTP represents an HTTP-based MCP server.
 	McpServerTypeHTTP McpServerType = "http"
+	// McpServerTypeSDK represents an in-process SDK MCP server.
+	McpServerTypeSDK McpServerType = "sdk"
 )
 
 // McpServerConfig represents MCP server configuration.
@@ -136,6 +155,26 @@ func (c *McpHTTPServerConfig) GetType() McpServerType {
 	return McpServerTypeHTTP
 }
 
+// McpSDKServer represents an in-process MCP server instance.
+// This is an interface to avoid circular dependencies.
+type McpSDKServer interface {
+	Name() string
+	Version() string
+	HandleJSONRPC(ctx interface{}, request []byte) ([]byte, error)
+}
+
+// McpSdkServerConfig configures an in-process SDK MCP server.
+type McpSdkServerConfig struct {
+	Type     McpServerType `json:"type"`
+	Name     string        `json:"name"`
+	Instance McpSDKServer  `json:"-"` // Not serialized, internal use only
+}
+
+// GetType returns the server type for McpSdkServerConfig.
+func (c *McpSdkServerConfig) GetType() McpServerType {
+	return McpServerTypeSDK
+}
+
 // Validate checks the options for valid values and constraints.
 func (o *Options) Validate() error {
 	// Validate MaxThinkingTokens
@@ -164,6 +203,16 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("MaxBufferSize must be positive, got %d", *o.MaxBufferSize)
 	}
 
+	// Validate plugins
+	for i, plugin := range o.Plugins {
+		if plugin.Type != PluginTypeLocal {
+			return fmt.Errorf("plugin[%d]: unsupported plugin type: %s", i, plugin.Type)
+		}
+		if plugin.Path == "" {
+			return fmt.Errorf("plugin[%d]: path cannot be empty", i)
+		}
+	}
+
 	return nil
 }
 
@@ -176,6 +225,7 @@ func NewOptions() *Options {
 		AddDirs:           []string{},
 		McpServers:        make(map[string]McpServerConfig),
 		Agents:            make(map[string]AgentDefinition),
+		Plugins:           []PluginConfig{},
 		Hooks:             make(map[string][]any),
 		ExtraArgs:         make(map[string]*string),
 		ExtraEnv:          make(map[string]string),

@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.1.5
+
+### Major Features
+
+- **SDK MCP Server Support** 🎉: Added full support for in-process MCP servers, achieving 100% feature parity with Python SDK
+  - `CreateSDKMcpServer()` function to create in-process MCP servers
+  - `ToolDef` type for defining tools with type-safe schemas and handlers
+  - `Tool()` convenience function for concise tool creation
+  - Support for both text and image content in tool results
+  - `TextContent` and `ImageContent` types for tool return values
+  - Direct access to application state from tool handlers
+  - Zero external dependencies - pure Go implementation
+  - Full context.Context support for cancellation and timeouts
+  - Complete MCP protocol implementation in `internal/mcp` package
+
+- **Plugin support**: Added the ability to load Claude Code plugins programmatically through the SDK
+  - New `PluginConfig` type with `Type` and `Path` fields
+  - New `WithPlugins()` functional option for configuration
+  - CLI automatically passes `--plugin-dir` flags for each configured plugin
+  - Currently supports `PluginTypeLocal` for local filesystem plugins
+
+### Examples
+
+- Added comprehensive SDK MCP Server example (`examples/15_sdk_mcp_server/`)
+  - Simple text tools
+  - Image content generation
+  - Multiple tools in one server
+  - Application state access
+  - Context timeout handling
+
+- Added plugin support example (`examples/14_plugin_support/`)
+  - Basic plugin loading
+  - Multiple plugins configuration
+  - Plugin structure documentation
+
+### Documentation
+
+- Added `SDK_DEEP_COMPARISON_REPORT.md` (1166 lines)
+  - Complete Python vs Go SDK comparison
+  - Architecture analysis
+  - Feature-by-feature comparison
+  - Use case recommendations
+
+### Breaking Changes
+
+None - fully backward compatible
+
+## 0.1.4 (Previous)
+
+### Features
+
+- **Plugin support**: Added the ability to load Claude Code plugins programmatically through the SDK. Plugins can be specified using the new `Plugins` field in `Options` with a `PluginConfig` type that supports loading local plugins by path. This enables SDK applications to extend functionality with custom commands and capabilities defined in plugin directories
+  - New `PluginConfig` type with `Type` and `Path` fields
+  - New `WithPlugins()` functional option for configuration
+  - CLI automatically passes `--plugin-dir` flags for each configured plugin
+  - Currently supports `PluginTypeLocal` for local filesystem plugins
+
 ## 0.1.4
 
 ### Features

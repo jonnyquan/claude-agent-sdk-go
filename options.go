@@ -25,6 +25,15 @@ type McpSSEServerConfig = shared.McpSSEServerConfig
 // McpHTTPServerConfig represents an HTTP MCP server configuration.
 type McpHTTPServerConfig = shared.McpHTTPServerConfig
 
+// McpSdkServerConfig represents an SDK MCP server configuration.
+type McpSdkServerConfig = shared.McpSdkServerConfig
+
+// PluginType defines the type of plugin.
+type PluginType = shared.PluginType
+
+// PluginConfig represents plugin configuration.
+type PluginConfig = shared.PluginConfig
+
 // Re-export constants
 const (
 	PermissionModeDefault           = shared.PermissionModeDefault
@@ -34,6 +43,8 @@ const (
 	McpServerTypeStdio              = shared.McpServerTypeStdio
 	McpServerTypeSSE                = shared.McpServerTypeSSE
 	McpServerTypeHTTP               = shared.McpServerTypeHTTP
+	McpServerTypeSDK                = shared.McpServerTypeSDK
+	PluginTypeLocal                 = shared.PluginTypeLocal
 )
 
 // Option configures Options using the functional options pattern.
@@ -162,6 +173,19 @@ func WithAgents(agents map[string]AgentDefinition) Option {
 			copied[name] = def
 		}
 		o.Agents = copied
+	}
+}
+
+// WithPlugins configures custom plugins for the CLI.
+func WithPlugins(plugins ...PluginConfig) Option {
+	return func(o *Options) {
+		if len(plugins) == 0 {
+			o.Plugins = nil
+			return
+		}
+		copied := make([]PluginConfig, len(plugins))
+		copy(copied, plugins)
+		o.Plugins = copied
 	}
 }
 

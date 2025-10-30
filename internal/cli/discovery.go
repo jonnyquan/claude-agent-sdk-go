@@ -319,6 +319,15 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 		}
 	}
 
+	// Add plugin directories
+	if len(options.Plugins) > 0 {
+		for _, plugin := range options.Plugins {
+			if plugin.Type == shared.PluginTypeLocal {
+				cmd = append(cmd, "--plugin-dir", plugin.Path)
+			}
+		}
+	}
+
 	return cmd
 }
 
