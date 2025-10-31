@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.1.6
+
+### Features
+
+- **Budget Control**: Add `max_budget_usd` option to limit API costs
+  - New `MaxBudgetUSD` field in Options (`*float64`)
+  - New `WithMaxBudgetUSD(budget float64)` functional option
+  - CLI passes `--max-budget-usd` flag
+  - Returns `error_max_budget_usd` when budget is exceeded
+  - Includes cost tracking in ResultMessage
+
+- **Thinking Token Limit**: Enable `max_thinking_tokens` option
+  - Existing `MaxThinkingTokens` field now fully functional
+  - Uncommented CLI flag passing (`--max-thinking-tokens`)
+  - Controls extended thinking depth and reasoning cost
+  - Helps balance speed, cost, and quality
+
+### Examples
+
+- Add `examples/16_max_budget_usd/` demonstrating budget control
+  - 4 scenarios: no limit, reasonable, tight, thinking tokens
+  - Cost tracking and error handling examples
+  - Comprehensive README with best practices
+
+### Testing
+
+- Add `options_test.go` with budget control tests
+  - TestWithMaxBudgetUSD
+  - TestWithMaxThinkingTokens  
+  - TestWithMaxBudgetUSDAndMaxThinkingTokens
+
+### Documentation
+
+- Update option documentation with cost control notes
+- Add budget exceeded error handling examples
+- Document timing: budget checked after each API call
+
+### Alignment
+
+- **100% Feature Parity** with Python SDK 0.1.6
+  - Both SDKs now have max_budget_usd
+  - Both SDKs now have max_thinking_tokens fully enabled
+
 ## 0.1.5
 
 ### Major Features

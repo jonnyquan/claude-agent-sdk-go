@@ -227,6 +227,18 @@ func WithMaxTurns(turns int) Option {
 	}
 }
 
+// WithMaxBudgetUSD sets the maximum budget in USD for API costs.
+// When the cumulative cost exceeds this budget, the CLI will stop execution
+// and return an error_max_budget_usd result.
+//
+// Note: The actual cost may slightly exceed the budget by up to one API call's worth,
+// as budget checking happens after each API call completes.
+func WithMaxBudgetUSD(budget float64) Option {
+	return func(o *Options) {
+		o.MaxBudgetUSD = &budget
+	}
+}
+
 // WithSettings sets the settings file path or JSON string.
 func WithSettings(settings string) Option {
 	return func(o *Options) {

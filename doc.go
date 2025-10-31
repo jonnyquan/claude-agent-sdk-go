@@ -28,4 +28,4 @@
 package claudecode
 
 // Version represents the current version of the Claude Code SDK for Go.
-const Version = "0.1.5"
+const Version = "0.1.6"

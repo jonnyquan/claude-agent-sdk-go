@@ -38,10 +38,11 @@ type Options struct {
 	PermissionPromptToolName *string         `json:"permission_prompt_tool_name,omitempty"`
 
 	// Session & State Management
-	ContinueConversation   bool    `json:"continue_conversation,omitempty"`
-	Resume                 *string `json:"resume,omitempty"`
-	MaxTurns               int     `json:"max_turns,omitempty"`
-	Settings               *string `json:"settings,omitempty"`
+	ContinueConversation   bool     `json:"continue_conversation,omitempty"`
+	Resume                 *string  `json:"resume,omitempty"`
+	MaxTurns               int      `json:"max_turns,omitempty"`
+	MaxBudgetUSD           *float64 `json:"max_budget_usd,omitempty"` // Budget limit in USD for API costs
+	Settings               *string  `json:"settings,omitempty"`
 	IncludePartialMessages bool    `json:"include_partial_messages,omitempty"`
 	ForkSession            bool    `json:"fork_session,omitempty"`
 

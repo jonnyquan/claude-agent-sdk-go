@@ -178,10 +178,9 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 	if options.Model != nil {
 		cmd = append(cmd, "--model", *options.Model)
 	}
-	// NOTE: --max-thinking-tokens not supported by current CLI version
-	// if options.MaxThinkingTokens > 0 {
-	//	cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", options.MaxThinkingTokens))
-	// }
+	if options.MaxThinkingTokens > 0 {
+		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", options.MaxThinkingTokens))
+	}
 	return cmd
 }
 
@@ -204,6 +203,9 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	}
 	if options.MaxTurns > 0 {
 		cmd = append(cmd, "--max-turns", fmt.Sprintf("%d", options.MaxTurns))
+	}
+	if options.MaxBudgetUSD != nil {
+		cmd = append(cmd, "--max-budget-usd", fmt.Sprintf("%.4f", *options.MaxBudgetUSD))
 	}
 	if options.Settings != nil {
 		cmd = append(cmd, "--settings", *options.Settings)
