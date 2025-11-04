@@ -98,6 +98,7 @@ func getCommonCLILocations() []string {
 			filepath.Join(homeDir, ".local", "bin", "claude"),
 			filepath.Join(homeDir, "node_modules", ".bin", "claude"),
 			filepath.Join(homeDir, ".yarn", "bin", "claude"),
+			filepath.Join(homeDir, ".claude", "local", "claude"),
 			"/opt/homebrew/bin/claude",       // macOS Homebrew ARM
 			"/usr/local/homebrew/bin/claude", // macOS Homebrew Intel
 		}
@@ -169,7 +170,11 @@ func addToolControlFlags(cmd []string, options *shared.Options) []string {
 }
 
 func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
-	if options.SystemPrompt != nil {
+	if options.SystemPrompt == nil {
+		// When no system prompt is specified, explicitly pass empty string
+		// to give users full control over agent behavior
+		cmd = append(cmd, "--system-prompt", "")
+	} else {
 		cmd = append(cmd, "--system-prompt", *options.SystemPrompt)
 	}
 	if options.AppendSystemPrompt != nil {

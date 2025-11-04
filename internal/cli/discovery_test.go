@@ -875,3 +875,64 @@ func TestWorkingDirectoryValidationStatError(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+// TestSystemPromptDefaultBehavior tests that empty system prompt is passed when SystemPrompt is nil
+func TestSystemPromptDefaultBehavior(t *testing.T) {
+	tests := []struct {
+		name           string
+		options        *shared.Options
+		expectContains []string // Expected arguments to be present
+	}{
+		{
+			name:    "nil_system_prompt_passes_empty_string",
+			options: &shared.Options{SystemPrompt: nil},
+			expectContains: []string{
+				"--system-prompt",
+				"", // Empty string should be the next argument
+			},
+		},
+		{
+			name: "explicit_system_prompt_passes_value",
+			options: &shared.Options{
+				SystemPrompt: stringPtr("You are a helpful assistant"),
+			},
+			expectContains: []string{
+				"--system-prompt",
+				"You are a helpful assistant",
+			},
+		},
+		{
+			name: "empty_string_system_prompt_passes_empty",
+			options: &shared.Options{
+				SystemPrompt: stringPtr(""),
+			},
+			expectContains: []string{
+				"--system-prompt",
+				"",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := BuildCommand("/usr/local/bin/claude", tt.options, false)
+
+			// Find --system-prompt flag
+			found := false
+			for i := 0; i < len(cmd)-1; i++ {
+				if cmd[i] == "--system-prompt" {
+					found = true
+					// Verify the value after the flag
+					if cmd[i+1] != tt.expectContains[1] {
+						t.Errorf("Expected system prompt value %q, got %q", tt.expectContains[1], cmd[i+1])
+					}
+					break
+				}
+			}
+
+			if !found {
+				t.Error("Expected --system-prompt flag to be present")
+			}
+		})
+	}
+}

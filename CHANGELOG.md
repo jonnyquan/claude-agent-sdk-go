@@ -24,6 +24,11 @@
   - Cost tracking and error handling examples
   - Comprehensive README with best practices
 
+### Bug Fixes
+
+- **System prompt defaults**: Fixed issue where a default system prompt was being used when none was specified. The SDK now correctly uses an empty system prompt by default, giving users full control over agent behavior
+- **CLI path discovery**: Added `~/.claude/local/claude` to the list of standard CLI search paths for improved Claude Code discovery
+
 ### Testing
 
 - Add `options_test.go` with budget control tests
