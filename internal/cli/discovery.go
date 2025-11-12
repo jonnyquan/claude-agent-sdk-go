@@ -183,6 +183,9 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 	if options.Model != nil {
 		cmd = append(cmd, "--model", *options.Model)
 	}
+	if options.FallbackModel != nil {
+		cmd = append(cmd, "--fallback-model", *options.FallbackModel)
+	}
 	if options.MaxThinkingTokens > 0 {
 		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", options.MaxThinkingTokens))
 	}

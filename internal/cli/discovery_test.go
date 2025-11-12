@@ -876,6 +876,55 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+// TestFallbackModelSupport tests fallback_model option
+func TestFallbackModelSupport(t *testing.T) {
+	tests := []struct {
+		name           string
+		options        *shared.Options
+		expectContains map[string]string // flag -> value pairs
+	}{
+		{
+			name: "model_and_fallback_model_both_set",
+			options: &shared.Options{
+				Model:         stringPtr("opus"),
+				FallbackModel: stringPtr("sonnet"),
+			},
+			expectContains: map[string]string{
+				"--model":          "opus",
+				"--fallback-model": "sonnet",
+			},
+		},
+		{
+			name: "only_fallback_model_set",
+			options: &shared.Options{
+				FallbackModel: stringPtr("sonnet"),
+			},
+			expectContains: map[string]string{
+				"--fallback-model": "sonnet",
+			},
+		},
+		{
+			name: "only_model_set",
+			options: &shared.Options{
+				Model: stringPtr("opus"),
+			},
+			expectContains: map[string]string{
+				"--model": "opus",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := BuildCommand("/usr/local/bin/claude", tt.options, false)
+
+			for flag, expectedValue := range tt.expectContains {
+				assertContainsArgs(t, cmd, flag, expectedValue)
+			}
+		})
+	}
+}
+
 // TestSystemPromptDefaultBehavior tests that empty system prompt is passed when SystemPrompt is nil
 func TestSystemPromptDefaultBehavior(t *testing.T) {
 	tests := []struct {

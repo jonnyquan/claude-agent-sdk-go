@@ -31,6 +31,7 @@ type Options struct {
 	SystemPrompt       *string `json:"system_prompt,omitempty"`
 	AppendSystemPrompt *string `json:"append_system_prompt,omitempty"`
 	Model              *string `json:"model,omitempty"`
+	FallbackModel      *string `json:"fallback_model,omitempty"`
 	MaxThinkingTokens  int     `json:"max_thinking_tokens,omitempty"`
 
 	// Permission & Safety System
