@@ -1,573 +1,535 @@
-# Claude Code SDK for Go
-
-<div align="center">
-  <img src="gopher.png" alt="Go Gopher" width="200"/>
-</div>
+# Claude Agent SDK for Go
 
 <div align="center">
 
-[![CI](https://github.com/jonnyquan/claude-agent-sdk-go/actions/workflows/ci.yml/badge.svg)](https://github.com/jonnyquan/claude-agent-sdk-go/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/jonnyquan/claude-agent-sdk-go.svg)](https://pkg.go.dev/github.com/jonnyquan/claude-agent-sdk-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/jonnyquan/claude-agent-sdk-go)](https://goreportcard.com/report/github.com/jonnyquan/claude-agent-sdk-go)
-[![codecov](https://codecov.io/gh/severity1/claude-agent-sdk-go/branch/main/graph/badge.svg)](https://codecov.io/gh/severity1/claude-agent-sdk-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-0.1.9-blue.svg)](https://github.com/jonnyquan/claude-agent-sdk-go/releases)
+
+**Production-ready Go SDK for Claude AI agent integration**
+
+[Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [Examples](#-examples) • [Documentation](#-documentation)
 
 </div>
 
-Unofficial Go SDK for Claude Code CLI integration. Build production-ready applications that leverage Claude's advanced code understanding, secure file operations, and external tool integrations through a clean, idiomatic Go API with comprehensive error handling and automatic resource management.
+---
 
-**🚀 Two powerful APIs for different use cases:**
-- **Query API**: One-shot operations, automation, CI/CD integration  
-- **Client API**: Interactive conversations, multi-turn workflows, streaming responses
-- **WithClient**: Go-idiomatic context manager for automatic resource management
+## 🌟 Overview
 
-![Claude Code SDK in Action](cc-sdk-go-in-action-v2.gif)
+The Claude Agent SDK for Go provides a clean, idiomatic interface to build AI-powered applications with Claude. Designed for production use with comprehensive error handling, automatic resource management, and full feature parity with the official Python SDK.
 
-## Installation
+### Why This SDK?
+
+- **🎯 Two Powerful APIs**: Query API for automation, Client API for interactive workflows
+- **📦 Zero-Config Deployment**: Optional bundled CLI - no separate installation required
+- **🔒 Production-Ready**: Comprehensive error handling, timeouts, resource cleanup
+- **🔄 100% Python SDK Parity**: Same features, Go-native design (v0.1.9)
+- **🪝 Advanced Hook System**: Intercept and control tool execution with custom callbacks
+- **📊 Structured Outputs**: JSON schema validation for guaranteed response formats
+- **🔗 Rich Integrations**: File operations, MCP servers, external tools
+- **🛡️ Security-First**: Granular permissions, access controls, runtime hooks
+
+## 📦 Installation
 
 ```bash
-go get github.com/jonnyquan/claude-agent-sdk-go
+go get github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk
 ```
 
-**Prerequisites:** Go 1.18+
+**Requirements:**
+- Go 1.18 or later
+- Claude CLI 2.0.50+ (auto-bundled or manual installation)
 
-**Note:** The Claude Code CLI can be optionally bundled with the SDK - no separate installation required! The SDK will automatically use a bundled CLI if available. For manual installation or custom versions:
-- Node.js (for Claude Code)
-- Claude Code 2.0.0+: `curl -fsSL https://claude.ai/install.sh | bash`
-- Or specify custom path: `claudecode.WithCLIPath("/path/to/claude")`
+**Optional**: The SDK can bundle the Claude CLI for zero-dependency deployment. For custom installations:
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
 
-## Key Features
+## 🚀 Quick Start
 
-**Two APIs for different needs** - Query for automation, Client for interaction
-**Structured Outputs** - JSON schema validation for guaranteed response formats
-**CLI Auto-Bundling** - Optional bundled Claude CLI for zero-dependency deployment
-**100% Python SDK compatibility** - Same functionality, Go-native design (including Hook system)
-**Enhanced Hook system** - Intercept and control tool execution with custom callbacks and timeouts
-**Automatic resource management** - WithClient provides Go-idiomatic context manager pattern
-**Session management** - Isolated conversation contexts with `Query()` and `QueryWithSession()`
-**Built-in tool integration** - File operations, AWS, GitHub, databases, and more
-**Production ready** - Comprehensive error handling, timeouts, resource cleanup, fallback models
-**Security focused** - Granular tool permissions, access controls, and runtime hooks
-**Context-aware** - Maintain conversation state across multiple interactions  
+### New API (Recommended) - `pkg/claudesdk`
 
-## Usage
-
-### Query API - One-Shot Operations
-Best for automation, scripting, and tasks with clear completion criteria:
+The new API provides a cleaner, more organized structure:
 
 ```go
 package main
 
 import (
     "context"
-    "errors"
     "fmt"
     "log"
 
-    "github.com/jonnyquan/claude-agent-sdk-go"
+    "github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk"
 )
 
 func main() {
-    fmt.Println("Claude Code SDK - Query API Example")
-    fmt.Println("Asking: What is 2+2?")
-
     ctx := context.Background()
 
-    // Create and execute query
-    iterator, err := claudecode.Query(ctx, "What is 2+2?")
+    // Query API - Simple one-shot operations
+    messages, err := claudesdk.Query(ctx, "Explain Go channels in 2 sentences")
     if err != nil {
-        log.Fatalf("Query failed: %v", err)
+        log.Fatal(err)
     }
-    defer iterator.Close()
 
-    fmt.Println("\nResponse:")
-
-    // Iterate through messages
+    // Process response
     for {
-        message, err := iterator.Next(ctx)
+        msg, err := messages.Next(ctx)
         if err != nil {
-            if errors.Is(err, claudecode.ErrNoMoreMessages) {
+            if err == claudesdk.ErrNoMoreMessages {
                 break
             }
-            log.Fatalf("Failed to get message: %v", err)
+            log.Fatal(err)
         }
 
-        if message == nil {
-            break
-        }
-
-        // Handle different message types
-        switch msg := message.(type) {
-        case *claudecode.AssistantMessage:
-            for _, block := range msg.Content {
-                if textBlock, ok := block.(*claudecode.TextBlock); ok {
-                    fmt.Print(textBlock.Text)
+        if assistant, ok := msg.(*claudesdk.AssistantMessage); ok {
+            for _, block := range assistant.Content {
+                if text, ok := block.(*claudesdk.TextBlock); ok {
+                    fmt.Println(text.Text)
                 }
-            }
-        case *claudecode.ResultMessage:
-            if msg.IsError {
-                log.Printf("Error: %s", msg.Result)
             }
         }
     }
-
-    fmt.Println("\nQuery completed!")
 }
 ```
+
+### Client API - Interactive Workflows
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // WithClient provides automatic resource management
+    err := claudesdk.WithClient(ctx, func(client claudesdk.Client) error {
+        // Send query
+        if err := client.Query(ctx, "Write a hello world in Go"); err != nil {
+            return err
+        }
+
+        // Receive streaming response
+        messages := client.ReceiveResponse(ctx)
+        for {
+            msg, err := messages.Next(ctx)
+            if err != nil {
+                if err == claudesdk.ErrNoMoreMessages {
+                    break
+                }
+                return err
+            }
+
+            if assistant, ok := msg.(*claudesdk.AssistantMessage); ok {
+                for _, block := range assistant.Content {
+                    if text, ok := block.(*claudesdk.TextBlock); ok {
+                        fmt.Print(text.Text)
+                    }
+                }
+            }
+        }
+        return nil
+    })
+
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### Backward Compatibility
+
+The old API is still supported via the compatibility layer:
+
+```go
+import "github.com/jonnyquan/claude-agent-sdk-go"  // Old API
+
+// Works exactly as before
+messages, err := claudecode.Query(ctx, "Hello!")
+```
+
+## ✨ Features
+
+### Query API - Automation & Scripting
+
+Perfect for one-shot operations, automation, and CI/CD integration:
+
+```go
+// Simple query with options
+messages, err := claudesdk.Query(ctx, 
+    "Analyze this codebase and suggest improvements",
+    claudesdk.WithCwd("/path/to/project"),
+    claudesdk.WithAllowedTools("Read", "List"),
+    claudesdk.WithModel("claude-sonnet-4-5"),
+)
+```
+
+**Use Query API when you:**
+- Need automated code analysis or generation
+- Want one-shot task completion
+- Are building CI/CD integrations
+- Prefer stateless operations
 
 ### Client API - Interactive & Multi-Turn
-**WithClient provides automatic resource management (equivalent to Python's `async with`):**
+
+For complex workflows and interactive applications:
 
 ```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "log"
-
-    "github.com/jonnyquan/claude-agent-sdk-go"
+err := claudesdk.WithClient(ctx, func(client claudesdk.Client) error {
+    // First query
+    client.Query(ctx, "Initialize a Go project")
+    
+    // Follow-up in same context
+    client.Query(ctx, "Add unit tests")
+    
+    // Another follow-up
+    return client.Query(ctx, "Add CI/CD configuration")
+},
+    claudesdk.WithSystemPrompt("You are a Go expert"),
+    claudesdk.WithMaxTurns(10),
 )
-
-func main() {
-    fmt.Println("Claude Code SDK - Client Streaming Example")
-    fmt.Println("Asking: Explain Go goroutines with a simple example")
-
-    ctx := context.Background()
-    question := "Explain what Go goroutines are and show a simple example"
-
-    // WithClient handles connection lifecycle automatically
-    err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
-        fmt.Println("\nConnected! Streaming response:")
-
-        // Simple query uses default session
-        if err := client.Query(ctx, question); err != nil {
-            return fmt.Errorf("query failed: %w", err)
-        }
-
-        // Stream messages in real-time
-        msgChan := client.ReceiveMessages(ctx)
-        for {
-            select {
-            case message := <-msgChan:
-                if message == nil {
-                    return nil // Stream ended
-                }
-
-                switch msg := message.(type) {
-                case *claudecode.AssistantMessage:
-                    // Print streaming text as it arrives
-                    for _, block := range msg.Content {
-                        if textBlock, ok := block.(*claudecode.TextBlock); ok {
-                            fmt.Print(textBlock.Text)
-                        }
-                    }
-                case *claudecode.ResultMessage:
-                    if msg.IsError {
-                        return fmt.Errorf("error: %s", msg.Result)
-                    }
-                    return nil // Success, stream complete
-                }
-            case <-ctx.Done():
-                return ctx.Err()
-            }
-        }
-    })
-
-    if err != nil {
-        log.Fatalf("Streaming failed: %v", err)
-    }
-
-    fmt.Println("\n\nStreaming completed!")
-}
 ```
 
-### Session Management
+**Use Client API when you:**
+- Need multi-turn conversations
+- Want to build context across requests
+- Are creating interactive applications
+- Need real-time streaming
 
-**Maintain conversation context across multiple queries with session management:**
+### Structured Outputs - Type-Safe Responses
 
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "log"
-
-    "github.com/jonnyquan/claude-agent-sdk-go"
-)
-
-func main() {
-    fmt.Println("Claude Code SDK - Session Management Example")
-
-    ctx := context.Background()
-
-    err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
-        fmt.Println("\nDemonstrating isolated sessions:")
-
-        // Session A: Math conversation
-        sessionA := "math-session"
-        if err := client.QueryWithSession(ctx, "Remember this: x = 5", sessionA); err != nil {
-            return err
-        }
-
-        // Session B: Programming conversation
-        sessionB := "programming-session"
-        if err := client.QueryWithSession(ctx, "Remember this: language = Go", sessionB); err != nil {
-            return err
-        }
-
-        // Query each session - they maintain separate contexts
-        fmt.Println("\nQuerying math session:")
-        if err := client.QueryWithSession(ctx, "What is x * 2?", sessionA); err != nil {
-            return err
-        }
-
-        fmt.Println("\nQuerying programming session:")
-        if err := client.QueryWithSession(ctx, "What language did I mention?", sessionB); err != nil {
-            return err
-        }
-
-        // Default session query (separate from above)
-        fmt.Println("\nDefault session (no context from above):")
-        return client.Query(ctx, "What did I just ask about?") // Won't know about x or Go
-    })
-
-    if err != nil {
-        log.Fatalf("Session demo failed: %v", err)
-    }
-
-    fmt.Println("Session management demo completed!")
-}
-```
-
-**Traditional Client API (still supported):**
-
-<details>
-<summary>Click to see manual resource management approach</summary>
+Get validated JSON responses with schema enforcement:
 
 ```go
-func traditionalClientExample() {
-    ctx := context.Background()
-    
-    client := claudecode.NewClient()
-    if err := client.Connect(ctx); err != nil {
-        log.Fatalf("Failed to connect: %v", err)
-    }
-    defer client.Disconnect() // Manual cleanup required
-    
-    // Use client...
-}
-```
-</details>
-
-## Hook System - Runtime Control & Interception
-
-**New in v0.3.0**: Control and intercept tool execution with custom hooks (compatible with Python SDK v0.1.3):
-
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "strings"
-    
-    "github.com/jonnyquan/claude-agent-sdk-go"
-)
-
-func main() {
-    ctx := context.Background()
-    
-    // Define security hook
-    securityHook := func(input claudecode.HookInput, toolUseID *string, ctx claudecode.HookContext) (claudecode.HookJSONOutput, error) {
-        toolName := input["tool_name"].(string)
-        
-        if toolName == "Bash" {
-            command := input["tool_input"].(map[string]any)["command"].(string)
-            
-            // Block dangerous commands
-            if strings.Contains(command, "rm -rf") {
-                return claudecode.NewBlockingOutput(
-                    "Blocked dangerous command",
-                    "Security policy violation",
-                ), nil
-            }
-        }
-        
-        // Allow safe commands
-        return claudecode.NewPreToolUseOutput(
-            claudecode.PermissionDecisionAllow, "", nil,
-        ), nil
-    }
-    
-    // Use hook with query
-    err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
-        return client.Query(ctx, "List files in current directory")
-    },
-        // Attach hook to intercept Bash tool usage
-        claudecode.WithHook(claudecode.HookEventPreToolUse, claudecode.HookMatcher{
-            Matcher: "Bash",
-            Hooks:   []claudecode.HookCallback{securityHook},
-        }),
-    )
-    
-    if err != nil {
-        fmt.Printf("Error: %v\n", err)
-    }
-}
-```
-
-**Hook capabilities:**
-- **PreToolUse**: Intercept before tool execution, modify inputs, block dangerous operations
-- **PostToolUse**: Process tool outputs, log results, transform responses
-- **UserPromptSubmit**: Validate and transform user inputs
-- **Stop/SubagentStop**: Handle completion events
-- **PreCompact**: Manage context before compaction
-
-**Common use cases:**
-```go
-// Security enforcement
-claudecode.WithHook(claudecode.HookEventPreToolUse, securityHook)
-
-// Audit logging
-claudecode.WithHook(claudecode.HookEventPostToolUse, auditHook)
-
-// Input validation
-claudecode.WithHook(claudecode.HookEventUserPromptSubmit, validationHook)
-```
-
-See [`examples/12_hooks/`](examples/12_hooks/) for comprehensive hook examples including security policies, audit logging, and custom workflows.
-
-## Tool Integration & External Services
-
-Integrate with file systems, cloud services, databases, and development tools:
-
-**Core Tools** (built-in file operations):
-```go
-// File analysis and documentation generation
-claudecode.Query(ctx, "Read all Go files and create API documentation",
-    claudecode.WithAllowedTools("Read", "Write"))
-```
-
-**MCP Tools** (external service integrations):
-```go
-// AWS infrastructure automation
-claudecode.Query(ctx, "List my S3 buckets and analyze their security settings",
-    claudecode.WithAllowedTools("mcp__aws-api-mcp__call_aws", "mcp__aws-api-mcp__suggest_aws_commands", "Write"))
-```
-
-## Configuration Options
-
-Customize Claude's behavior with functional options:
-
-**Tool & Permission Control:**
-```go
-claudecode.Query(ctx, prompt,
-    claudecode.WithAllowedTools("Read", "Write"),
-    claudecode.WithPermissionMode(claudecode.PermissionModeAcceptEdits))
-```
-
-**System Behavior:**
-```go
-claudecode.Query(ctx, prompt,
-    claudecode.WithSystemPrompt("You are a senior Go developer"),
-    claudecode.WithModel("claude-sonnet-4-5"),
-    claudecode.WithMaxTurns(10))
-```
-
-**Environment Variables** (new in v0.2.5):
-```go
-// Proxy configuration
-claudecode.NewClient(
-    claudecode.WithEnv(map[string]string{
-        "HTTP_PROXY":  "http://proxy.example.com:8080",
-        "HTTPS_PROXY": "http://proxy.example.com:8080",
-    }))
-
-// Individual variables
-claudecode.NewClient(
-    claudecode.WithEnvVar("DEBUG", "1"),
-    claudecode.WithEnvVar("CUSTOM_PATH", "/usr/local/bin"))
-```
-
-**Context & Working Directory:**
-```go
-claudecode.Query(ctx, prompt,
-    claudecode.WithCwd("/path/to/project"),
-    claudecode.WithAddDirs("src", "docs"))
-```
-
-**Structured Outputs** (new in v0.1.9):
-```go
-// Define JSON schema for validation
 schema := map[string]interface{}{
     "type": "object",
     "properties": map[string]interface{}{
-        "file_count": map[string]interface{}{"type": "number"},
-        "has_tests":  map[string]interface{}{"type": "boolean"},
+        "summary": map[string]interface{}{
+            "type": "string",
+        },
+        "line_count": map[string]interface{}{
+            "type": "number",
+        },
+        "languages": map[string]interface{}{
+            "type": "array",
+            "items": map[string]interface{}{"type": "string"},
+        },
     },
-    "required": []string{"file_count", "has_tests"},
+    "required": []string{"summary", "line_count", "languages"},
 }
 
-// Get validated JSON responses
-options := claudecode.NewOptions(
-    claudecode.WithOutputFormat(map[string]interface{}{
+messages, err := claudesdk.Query(ctx,
+    "Analyze this repository",
+    claudesdk.WithOutputFormat(map[string]interface{}{
         "type":   "json_schema",
         "schema": schema,
     }),
 )
 
-err := claudecode.Query(ctx, "Count Go files and check for tests", options, func(msg claudecode.Message) {
-    if result, ok := msg.(*claudecode.ResultMessage); ok && result.StructuredOutput != nil {
-        data := result.StructuredOutput.(map[string]interface{})
-        fmt.Printf("Files: %.0f, Has tests: %v\n", data["file_count"], data["has_tests"])
+// Get validated structured output
+for {
+    msg, _ := messages.Next(ctx)
+    if result, ok := msg.(*claudesdk.ResultMessage); ok {
+        if result.StructuredOutput != nil {
+            data := result.StructuredOutput.(map[string]interface{})
+            fmt.Printf("Summary: %s\n", data["summary"])
+            fmt.Printf("Lines: %.0f\n", data["line_count"])
+        }
     }
-})
+}
 ```
 
-**Hook Integration** (enhanced in v0.1.9):
+### Hook System - Runtime Control
+
+Intercept and control AI operations with custom hooks:
+
 ```go
-// Attach hooks to control tool execution
-claudecode.WithClient(ctx, func(client claudecode.Client) error {
-    return client.Query(ctx, "Run system commands")
+// Security hook to block dangerous operations
+securityHook := func(input claudesdk.HookInput, toolUseID *string, 
+                      ctx claudesdk.HookContext) (claudesdk.HookJSONOutput, error) {
+    
+    if toolName, ok := input["tool_name"].(string); ok && toolName == "Bash" {
+        command := input["tool_input"].(map[string]any)["command"].(string)
+        
+        if strings.Contains(command, "rm -rf") {
+            return claudesdk.HookJSONOutput{
+                "hookEventName":            "PreToolUse",
+                "permissionDecision":       claudesdk.PermissionDecisionDeny,
+                "permissionDecisionReason": "Dangerous command blocked",
+            }, nil
+        }
+    }
+    
+    return claudesdk.NewPreToolUseOutput(
+        claudesdk.PermissionDecisionAllow, "", nil,
+    ), nil
+}
+
+// Apply hook
+err := claudesdk.WithClient(ctx, func(client claudesdk.Client) error {
+    return client.Query(ctx, "Run system maintenance")
 },
-    claudecode.WithHook(claudecode.HookEventPreToolUse, claudecode.HookMatcher{
-        Matcher: "Bash",
-        Hooks:   []claudecode.HookCallback{securityHook},
-        Timeout: claudecode.IntPtr(30), // 30 second timeout
-    }),
-    claudecode.WithHook(claudecode.HookEventPostToolUse, claudecode.HookMatcher{
-        Matcher: "*", // All tools
-        Hooks:   []claudecode.HookCallback{auditHook},
-        Timeout: claudecode.IntPtr(60), // 60 second timeout
+    claudesdk.WithHook(claudesdk.HookEventPreToolUse, claudesdk.HookMatcher{
+        Callback: securityHook,
+        Timeout:  claudesdk.IntPtr(30),
     }),
 )
 ```
 
-**Session Management** (Client API):
-```go
-// WithClient provides isolated session contexts
-err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
-    // Default session
-    client.Query(ctx, "Remember: x = 5")
+**Available hook events:**
+- `PreToolUse` - Before tool execution
+- `PostToolUse` - After tool execution
+- `UserPromptSubmit` - On user input
+- `Stop` - On conversation completion
+- `SubagentStop` - On subagent completion
+- `PreCompact` - Before context compaction
 
-    // Named session (isolated context)
-    return client.QueryWithSession(ctx, "What is x?", "math-session")
+### Session Management
+
+Maintain isolated conversation contexts:
+
+```go
+err := claudesdk.WithClient(ctx, func(client claudesdk.Client) error {
+    // Session A: Math problems
+    client.QueryWithSession(ctx, "x = 5", "math")
+    client.QueryWithSession(ctx, "What is x * 2?", "math") // Returns 10
+    
+    // Session B: Coding (separate context)
+    client.QueryWithSession(ctx, "language = Go", "coding")
+    client.QueryWithSession(ctx, "What language?", "coding") // Returns Go
+    
+    // Default session (isolated from A and B)
+    return client.Query(ctx, "What did I ask?") // No prior context
 })
 ```
 
-See [pkg.go.dev](https://pkg.go.dev/github.com/jonnyquan/claude-agent-sdk-go) for complete API reference.
+### MCP Server Integration
 
-## When to Use Which API
+Connect to external tools and data sources:
 
-**🎯 Use Query API when you:**
-- Need one-shot automation or scripting
-- Have clear task completion criteria  
-- Want automatic resource cleanup
-- Are building CI/CD integrations
-- Prefer simple, stateless operations
+```go
+// Create custom MCP server
+server := claudesdk.CreateSDKMcpServer(&claudesdk.McpSdkServerConfig{
+    Name:        "calculator",
+    Description: "Math operations",
+    Tools: []claudesdk.McpTool{
+        {
+            Name:        "add",
+            Description: "Add two numbers",
+            Handler: func(args map[string]interface{}) (string, error) {
+                a := args["a"].(float64)
+                b := args["b"].(float64)
+                return fmt.Sprintf("%.2f", a+b), nil
+            },
+        },
+    },
+})
 
-**🔄 Use Client API (WithClient) when you:**  
-- Need interactive conversations
-- Want to build context across multiple requests
-- Are creating complex, multi-step workflows
-- Need real-time streaming responses
-- Want to iterate and refine based on previous results
-- **Need automatic resource management (recommended)**
+// Use in query
+err := claudesdk.WithClient(ctx, func(client claudesdk.Client) error {
+    return client.Query(ctx, "Calculate 15 + 27")
+},
+    claudesdk.WithMcpServers(map[string]claudesdk.McpServerConfig{
+        "calculator": server,
+    }),
+)
+```
 
-## Examples & Documentation
+## 📚 Examples
 
-Comprehensive examples covering every use case:
+We provide 24 comprehensive examples covering all use cases:
 
-**Learning Path (Easiest → Hardest):**
-- [`examples/01_quickstart/`](examples/01_quickstart/) - Query API fundamentals
-- [`examples/02_client_streaming/`](examples/02_client_streaming/) - WithClient streaming basics
-- [`examples/03_client_multi_turn/`](examples/03_client_multi_turn/) - Multi-turn conversations with automatic cleanup
-- [`examples/10_context_manager/`](examples/10_context_manager/) - WithClient vs manual patterns comparison
-- [`examples/11_session_management/`](examples/11_session_management/) - Session isolation and context management
+### Getting Started (1-11)
+- **01**: Quick Start - Basic Query API
+- **02**: Client Streaming - Real-time responses
+- **03**: Multi-turn Conversations
+- **04**: Query with Tools
+- **05**: Client with Tools
+- **06**: Query with MCP
+- **07**: Client with MCP
+- **08**: Advanced Client Patterns
+- **09**: Client vs Query Comparison
+- **10**: Context Manager Patterns
+- **11**: Session Management
 
-**Tool Integration:**
-- [`examples/04_query_with_tools/`](examples/04_query_with_tools/) - File operations with Query API
-- [`examples/05_client_with_tools/`](examples/05_client_with_tools/) - Interactive file workflows  
-- [`examples/06_query_with_mcp/`](examples/06_query_with_mcp/) - AWS automation with Query API
-- [`examples/07_client_with_mcp/`](examples/07_client_with_mcp/) - AWS management with Client API
+### Advanced Features (12-18)
+- **12**: Hook System
+- **14**: Plugin Support
+- **15**: SDK MCP Server
+- **17**: Structured Outputs
+- **18**: New API Basics
 
-**Advanced Patterns:**
-- [`examples/08_client_advanced/`](examples/08_client_advanced/) - WithClient error handling and production patterns
-- [`examples/09_client_vs_query/`](examples/09_client_vs_query/) - Modern API comparison and guidance
-- [`examples/12_hooks/`](examples/12_hooks/) - **NEW**: Hook system with security, audit, and custom workflows
+### New API Examples (19-24) 🆕
+- **19**: [Query Patterns](examples/19_new_query_patterns/) - Multiple configurations, timeouts
+- **20**: [Client Streaming](examples/20_new_client_streaming/) - WithClient patterns, multi-turn
+- **21**: [Structured Outputs](examples/21_new_structured_outputs/) - JSON schema validation
+- **22**: [Hooks System](examples/22_new_hooks_system/) - Event handling and callbacks
+- **23**: [MCP Integration](examples/23_new_mcp_integration/) - Server configuration
+- **24**: [Error Handling](examples/24_new_error_handling/) - Production patterns
 
-**📖 [Full Documentation](examples/README.md)** with usage patterns, security best practices, and troubleshooting.
+Run any example:
+```bash
+cd examples/19_new_query_patterns
+go run main.go
+```
 
-## Version History
+## 📖 Documentation
 
-### v0.3.0 (Latest)
-- **Hook System**: Complete implementation compatible with Python SDK v0.1.3
-  - PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact hooks
-  - Permission control with Allow/Deny/Ask decisions
-  - Runtime interception and control of tool execution
-- **Security**: Custom security policies via hooks
-- **Audit**: Complete audit logging capabilities
-- **Examples**: Comprehensive hook examples in `examples/12_hooks/`
+### API Reference
 
-### v0.2.5
-- Environment variable support (`WithEnv`, `WithEnvVar`)
-- Proxy configuration
-- Working directory and context management
+Full documentation available at [pkg.go.dev](https://pkg.go.dev/github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk)
 
-### v0.2.0
-- Client API with `WithClient` pattern
-- Session management
-- Streaming support
+### Configuration Options
 
-### v0.1.0
-- Initial release with Query API
-- Core tool integration
-- Basic MCP support
+```go
+// Tool and permission control
+claudesdk.WithAllowedTools("Read", "Write", "List")
+claudesdk.WithPermissionMode(claudesdk.PermissionModeAcceptEdits)
 
-## Development
+// System behavior
+claudesdk.WithSystemPrompt("You are a helpful assistant")
+claudesdk.WithModel("claude-sonnet-4-5")
+claudesdk.WithMaxTurns(20)
+claudesdk.WithMaxBudgetUSD(1.0)
 
-### Testing
+// Context and environment
+claudesdk.WithCwd("/path/to/project")
+claudesdk.WithAddDirs("src", "tests")
+claudesdk.WithEnv(map[string]string{"DEBUG": "1"})
+
+// Advanced features
+claudesdk.WithFallbackModel("claude-3-haiku-20240307")
+claudesdk.WithOutputFormat(jsonSchema)
+claudesdk.WithHook(eventType, matcher)
+claudesdk.WithMcpServers(serverMap)
+```
+
+### Migration Guide
+
+Migrating from old API to new API? See [MIGRATION.md](MIGRATION.md) for a complete guide.
+
+**Quick reference:**
+```go
+// Old API
+import "github.com/jonnyquan/claude-agent-sdk-go"
+claudecode.Query(ctx, "Hello")
+
+// New API (recommended)
+import "github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk"
+claudesdk.Query(ctx, "Hello")
+```
+
+Both APIs work - the new one is better organized and recommended for new projects.
+
+## 🏗️ Project Structure
+
+```
+claude-agent-sdk-go/
+├── pkg/
+│   └── claudesdk/        # 🆕 New public API
+│       ├── client.go     # Client interface
+│       ├── query.go      # Query operations
+│       ├── types.go      # Public types
+│       ├── options.go    # Configuration options
+│       ├── hooks.go      # Hook system
+│       ├── mcp.go        # MCP integration
+│       ├── errors.go     # Error definitions
+│       └── permissions.go # Permission management
+├── internal/
+│   ├── client/           # Client implementation
+│   ├── query/            # Query implementation
+│   ├── transport/        # Claude CLI communication
+│   ├── discovery/        # CLI discovery and bundling
+│   ├── parsing/          # Message parsing
+│   ├── mcp/              # MCP server implementation
+│   └── shared/           # Shared types and utilities
+├── claudecode.go         # Backward compatibility layer
+├── examples/             # 24 comprehensive examples
+└── MIGRATION.md          # Migration guide
+```
+
+## 🔧 Development
+
+### Running Tests
 
 ```bash
 # Run all tests
-make test
+go test ./...
 
-# Test hook system
-make test-hooks
+# Run specific package tests
+go test ./pkg/claudesdk
+go test ./internal/...
 
-# Run hook examples
-make example-hooks
-
-# Full CI pipeline
-make ci
+# With coverage
+go test -cover ./...
 ```
 
 ### Building Examples
 
 ```bash
 # Build all examples
-make examples
+for dir in examples/*/; do
+    (cd "$dir" && go build)
+done
 
-# Run specific hook example
-cd examples/12_hooks && go run main.go
+# Run specific example
+cd examples/19_new_query_patterns
+go run main.go
 ```
 
-See [`Makefile`](Makefile) for complete list of build targets.
+## 🤝 Contributing
 
-## Development
+Contributions are welcome! Please feel free to submit issues and pull requests.
 
-If you're contributing to this project, run the initial setup script to install git hooks:
+### Guidelines
 
-```bash
-./scripts/initial-setup.sh
-```
+1. Follow Go best practices and idioms
+2. Add tests for new features
+3. Update documentation
+4. Ensure backward compatibility when possible
 
-This installs a pre-push hook that runs lint checks before pushing, matching the CI workflow. To skip the hook temporarily, use `git push --no-verify`.
+## 📝 Version History
 
-## License
+### v0.1.9 (Current) - 2025-01-23
+- ✨ New `pkg/claudesdk` API with cleaner structure
+- 📊 Structured outputs with JSON schema validation
+- 🔧 CLI auto-bundling for zero-dependency deployment
+- 🪝 Hook system timeout configuration
+- 🐛 Enhanced error handling with AssistantMessageError
+- 📚 6 new comprehensive examples (19-24)
+- 🔄 Full backward compatibility via `claudecode.go`
+- 📖 Complete MIGRATION.md guide
 
-MIT - See [LICENSE](LICENSE) for details.
+### v0.1.6 - 2025-01-20
+- 🔄 Fallback model support
+- 🎯 Enhanced session management
+- 📝 Documentation improvements
 
-Includes Hook System implementation (2025) maintaining compatibility with Python Claude Agent SDK v0.1.3.
+### v0.1.0 - 2025-01-15
+- 🎉 Initial release
+- 🎯 Query and Client APIs
+- 🪝 Hook system
+- 🔗 MCP integration
+- 📦 Core tool support
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+Copyright (c) 2025 Jonny Quan and Contributors
+
+---
+
+<div align="center">
+
+**Built with ❤️ for the Go community**
+
+[Report Bug](https://github.com/jonnyquan/claude-agent-sdk-go/issues) • [Request Feature](https://github.com/jonnyquan/claude-agent-sdk-go/issues) • [Documentation](https://pkg.go.dev/github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk)
+
+</div>

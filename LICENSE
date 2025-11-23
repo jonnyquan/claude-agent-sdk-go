@@ -1,7 +1,7 @@
 MIT License
 
-Copyright (c) 2025 John Reilly Pospos
-Copyright (c) 2025 Hook System Contributors
+Copyright (c) 2025 Jonny Quan
+Copyright (c) 2025 Claude Agent SDK Go Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -20,14 +20,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Hook System Implementation (2025)
-This software includes Hook system implementation contributed in 2025, including:
-- Hook types and API layer (internal/shared/hooks.go, internal/shared/permissions.go)
-- Hook runtime processor (internal/query/hook_processor.go)
-- Control protocol handler (internal/query/control_protocol.go)
-- Transport integration for Hook support
-
-These contributions maintain compatibility with Python Claude Agent SDK v0.1.3.
