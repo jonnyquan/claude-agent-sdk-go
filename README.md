@@ -29,17 +29,24 @@ Unofficial Go SDK for Claude Code CLI integration. Build production-ready applic
 go get github.com/jonnyquan/claude-agent-sdk-go
 ```
 
-**Prerequisites:** Go 1.18+, Node.js, Claude Code (`npm install -g @anthropic-ai/claude-code`)
+**Prerequisites:** Go 1.18+
+
+**Note:** The Claude Code CLI can be optionally bundled with the SDK - no separate installation required! The SDK will automatically use a bundled CLI if available. For manual installation or custom versions:
+- Node.js (for Claude Code)
+- Claude Code 2.0.0+: `curl -fsSL https://claude.ai/install.sh | bash`
+- Or specify custom path: `claudecode.WithCLIPath("/path/to/claude")`
 
 ## Key Features
 
 **Two APIs for different needs** - Query for automation, Client for interaction
+**Structured Outputs** - JSON schema validation for guaranteed response formats
+**CLI Auto-Bundling** - Optional bundled Claude CLI for zero-dependency deployment
 **100% Python SDK compatibility** - Same functionality, Go-native design (including Hook system)
-**Hook system** - Intercept and control tool execution with custom callbacks
+**Enhanced Hook system** - Intercept and control tool execution with custom callbacks and timeouts
 **Automatic resource management** - WithClient provides Go-idiomatic context manager pattern
 **Session management** - Isolated conversation contexts with `Query()` and `QueryWithSession()`
 **Built-in tool integration** - File operations, AWS, GitHub, databases, and more
-**Production ready** - Comprehensive error handling, timeouts, resource cleanup
+**Production ready** - Comprehensive error handling, timeouts, resource cleanup, fallback models
 **Security focused** - Granular tool permissions, access controls, and runtime hooks
 **Context-aware** - Maintain conversation state across multiple interactions  
 
@@ -391,7 +398,35 @@ claudecode.Query(ctx, prompt,
     claudecode.WithAddDirs("src", "docs"))
 ```
 
-**Hook Integration** (new in v0.3.0):
+**Structured Outputs** (new in v0.1.9):
+```go
+// Define JSON schema for validation
+schema := map[string]interface{}{
+    "type": "object",
+    "properties": map[string]interface{}{
+        "file_count": map[string]interface{}{"type": "number"},
+        "has_tests":  map[string]interface{}{"type": "boolean"},
+    },
+    "required": []string{"file_count", "has_tests"},
+}
+
+// Get validated JSON responses
+options := claudecode.NewOptions(
+    claudecode.WithOutputFormat(map[string]interface{}{
+        "type":   "json_schema",
+        "schema": schema,
+    }),
+)
+
+err := claudecode.Query(ctx, "Count Go files and check for tests", options, func(msg claudecode.Message) {
+    if result, ok := msg.(*claudecode.ResultMessage); ok && result.StructuredOutput != nil {
+        data := result.StructuredOutput.(map[string]interface{})
+        fmt.Printf("Files: %.0f, Has tests: %v\n", data["file_count"], data["has_tests"])
+    }
+})
+```
+
+**Hook Integration** (enhanced in v0.1.9):
 ```go
 // Attach hooks to control tool execution
 claudecode.WithClient(ctx, func(client claudecode.Client) error {
@@ -400,10 +435,12 @@ claudecode.WithClient(ctx, func(client claudecode.Client) error {
     claudecode.WithHook(claudecode.HookEventPreToolUse, claudecode.HookMatcher{
         Matcher: "Bash",
         Hooks:   []claudecode.HookCallback{securityHook},
+        Timeout: claudecode.IntPtr(30), // 30 second timeout
     }),
     claudecode.WithHook(claudecode.HookEventPostToolUse, claudecode.HookMatcher{
         Matcher: "*", // All tools
         Hooks:   []claudecode.HookCallback{auditHook},
+        Timeout: claudecode.IntPtr(60), // 60 second timeout
     }),
 )
 ```

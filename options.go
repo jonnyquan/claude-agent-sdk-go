@@ -189,6 +189,14 @@ func WithPlugins(plugins ...PluginConfig) Option {
 	}
 }
 
+// WithOutputFormat sets the output format for structured outputs.
+// Example: WithOutputFormat(map[string]interface{}{"type": "json_schema", "schema": mySchema})
+func WithOutputFormat(format map[string]interface{}) Option {
+	return func(o *Options) {
+		o.OutputFormat = format
+	}
+}
+
 // WithUser sets the user under which the CLI should run (platform dependent).
 func WithUser(user string) Option {
 	return func(o *Options) {
@@ -344,4 +352,10 @@ func NewOptions(opts ...Option) *Options {
 	}
 
 	return options
+}
+
+// IntPtr returns a pointer to the given int value.
+// Useful for optional timeout fields in hooks.
+func IntPtr(i int) *int {
+	return &i
 }

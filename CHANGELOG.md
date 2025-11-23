@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.1.9
+
+### Features
+
+- **Structured Outputs Support**: Agents can now return validated JSON matching your schema
+  - New `OutputFormat` field in Options (`map[string]interface{}`)
+  - New `WithOutputFormat(format map[string]interface{})` functional option
+  - CLI passes `--json-schema` flag with schema definition
+  - New `StructuredOutput` field in `ResultMessage`
+  - Enables JSON schema validation for agent responses
+  - Compatible with Claude's structured output API
+
+- **Claude CLI Auto-Bundling**: Claude Code CLI is now optionally bundled with the SDK
+  - New `findBundledCLI()` function for automatic CLI discovery
+  - Added `_bundled/` directory structure for CLI binaries
+  - New `BundledCLIVersion` constant (currently "2.0.50")
+  - Bundled CLI takes priority over system-wide installations
+  - Cross-platform support for bundled binaries
+  - New `scripts/download_cli.go` utility for CLI downloading
+
+- **Enhanced Hook System**: Added timeout support for hook execution
+  - New `Timeout` field in `HookMatcher` (`*int`)
+  - Timeout passed to CLI via control protocol
+  - Per-matcher timeout configuration
+  - Improved hook reliability and control
+
+- **Enhanced Error Handling**: Added error field support for assistant messages  
+  - New `AssistantMessageError` type with error constants
+  - New `Error` field in `AssistantMessage` (`*AssistantMessageError`)
+  - Error types: authentication_failed, billing_error, rate_limit, invalid_request, server_error, unknown
+  - Better error reporting and handling
+
+- **Fallback Model Support**: Automatic fallback model handling (already supported in Options)
+  - Enhanced `FallbackModel` field usage
+  - Improved reliability when primary model is unavailable
+  - Parity with TypeScript/Python SDKs
+
+### Technical Improvements
+
+- Enhanced CLI command building with JSON schema support
+- Improved bundled CLI discovery with multiple fallback paths
+- Updated hook processing to include timeout configuration
+- Extended message types with structured output and error support
+
+### Documentation
+
+- Updated all type exports with new structured output types
+- Added CLI bundling documentation and utilities
+- Enhanced hook timeout configuration examples
+
+### Alignment
+
+- **100% Feature Parity** with Python SDK 0.1.9
+  - Both SDKs now have structured outputs support
+  - Both SDKs now support CLI bundling
+  - Both SDKs now have enhanced hook timeout support
+  - Both SDKs now have improved error handling
+
 ## 0.1.6
 
 ### Features

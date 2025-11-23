@@ -107,10 +107,14 @@ func (hp *HookProcessor) BuildInitializeConfig() map[string][]shared.HookMatcher
 			}
 			
 			if len(callbackIDs) > 0 {
-				matcherConfigs = append(matcherConfigs, shared.HookMatcherConfig{
+				config := shared.HookMatcherConfig{
 					Matcher:         matcher.Matcher,
 					HookCallbackIDs: callbackIDs,
-				})
+				}
+				if matcher.Timeout != nil {
+					config.Timeout = matcher.Timeout
+				}
+				matcherConfigs = append(matcherConfigs, config)
 			}
 		}
 		

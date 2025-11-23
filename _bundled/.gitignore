@@ -1,0 +1,8 @@
+# Bundled CLI binaries
+claude
+claude.exe
+*.tar.gz
+*.zip
+
+# Keep this file for directory structure
+!.gitignore

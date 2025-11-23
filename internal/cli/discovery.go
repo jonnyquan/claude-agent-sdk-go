@@ -27,6 +27,11 @@ var DiscoveryPaths = []string{
 
 // FindCLI searches for the Claude CLI binary in standard locations.
 func FindCLI() (string, error) {
+	// 0. Check bundled CLI first
+	if bundledPath := findBundledCLI(); bundledPath != "" {
+		return bundledPath, nil
+	}
+
 	// 1. Check PATH first - most common case
 	if path, err := exec.LookPath("claude"); err == nil {
 		// Check version (warning only, don't fail)
@@ -189,6 +194,19 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 	if options.MaxThinkingTokens > 0 {
 		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", options.MaxThinkingTokens))
 	}
+	
+	// Handle OutputFormat for structured outputs
+	if options.OutputFormat != nil {
+		if outputType, ok := options.OutputFormat["type"].(string); ok && outputType == "json_schema" {
+			if schema, ok := options.OutputFormat["schema"]; ok {
+				schemaBytes, err := json.Marshal(schema)
+				if err == nil {
+					cmd = append(cmd, "--json-schema", string(schemaBytes))
+				}
+			}
+		}
+	}
+	
 	return cmd
 }
 
@@ -473,4 +491,43 @@ func parseVersion(version string) [3]int {
 	}
 	
 	return result
+}
+
+// findBundledCLI searches for a bundled CLI binary in the SDK package.
+func findBundledCLI() string {
+	// Determine the CLI binary name based on platform
+	var cliName string
+	if runtime.GOOS == windowsOS {
+		cliName = "claude.exe"
+	} else {
+		cliName = "claude"
+	}
+
+	// Get the path to the bundled CLI relative to this package
+	// We need to find the path to the _bundled directory from the SDK root
+	// The _bundled directory should be at the same level as this package
+	// or can be determined from the module path
+	bundledPaths := []string{
+		// Path relative to SDK root when embedded in binary
+		filepath.Join("_bundled", cliName),
+		// Path relative to this file's location (for development/testing)
+		filepath.Join("..", "..", "..", "_bundled", cliName),
+		// Additional fallback paths
+		filepath.Join("claude-agent-sdk-go", "_bundled", cliName),
+	}
+
+	for _, bundledPath := range bundledPaths {
+		if info, err := os.Stat(bundledPath); err == nil && !info.IsDir() {
+			// Verify it's executable (Unix-like systems)
+			if runtime.GOOS != windowsOS {
+				if info.Mode()&0o111 == 0 {
+					continue // Not executable
+				}
+			}
+			fmt.Fprintf(os.Stderr, "Using bundled Claude CLI: %s\n", bundledPath)
+			return bundledPath
+		}
+	}
+
+	return ""
 }

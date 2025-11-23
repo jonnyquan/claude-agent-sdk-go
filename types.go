@@ -64,6 +64,19 @@ const (
 	// Note: ContentBlockTypeImage removed - not part of Python SDK
 )
 
+// AssistantMessageError represents error types for assistant messages
+type AssistantMessageError = shared.AssistantMessageError
+
+// Re-export assistant message error constants
+const (
+	AssistantMessageErrorAuthenticationFailed = shared.AssistantMessageErrorAuthenticationFailed
+	AssistantMessageErrorBillingError         = shared.AssistantMessageErrorBillingError
+	AssistantMessageErrorRateLimit            = shared.AssistantMessageErrorRateLimit
+	AssistantMessageErrorInvalidRequest       = shared.AssistantMessageErrorInvalidRequest
+	AssistantMessageErrorServerError          = shared.AssistantMessageErrorServerError
+	AssistantMessageErrorUnknown              = shared.AssistantMessageErrorUnknown
+)
+
 // Transport abstracts the communication layer with Claude Code CLI.
 // This interface stays in main package because it's used by client code.
 type Transport interface {

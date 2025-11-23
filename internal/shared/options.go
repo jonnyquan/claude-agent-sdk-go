@@ -77,6 +77,10 @@ type Options struct {
 
 	// Plugins configuration for custom plugins.
 	Plugins []PluginConfig `json:"plugins,omitempty"`
+
+	// OutputFormat for structured outputs (JSON Schema validation)
+	// Example: map[string]interface{}{"type": "json_schema", "schema": {...}}
+	OutputFormat map[string]interface{} `json:"output_format,omitempty"`
 }
 
 // AgentDefinition configures a named agent available to the CLI.

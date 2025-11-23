@@ -21,6 +21,18 @@ const (
 	// Note: Python SDK does not include "image" in ContentBlock types
 )
 
+// AssistantMessageError represents error types for assistant messages
+type AssistantMessageError string
+
+const (
+	AssistantMessageErrorAuthenticationFailed AssistantMessageError = "authentication_failed"
+	AssistantMessageErrorBillingError         AssistantMessageError = "billing_error"
+	AssistantMessageErrorRateLimit            AssistantMessageError = "rate_limit"
+	AssistantMessageErrorInvalidRequest       AssistantMessageError = "invalid_request"
+	AssistantMessageErrorServerError          AssistantMessageError = "server_error"
+	AssistantMessageErrorUnknown              AssistantMessageError = "unknown"
+)
+
 // Message represents any message type in the Claude Code protocol.
 type Message interface {
 	Type() string
@@ -102,10 +114,11 @@ func (m *UserMessage) UnmarshalJSON(data []byte) error {
 
 // AssistantMessage represents a message from the assistant.
 type AssistantMessage struct {
-	MessageType     string         `json:"type"`
-	Content         []ContentBlock `json:"content"`
-	Model           string         `json:"model"`
-	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"`
+	MessageType     string                  `json:"type"`
+	Content         []ContentBlock          `json:"content"`
+	Model           string                  `json:"model"`
+	ParentToolUseID *string                 `json:"parent_tool_use_id,omitempty"`
+	Error           *AssistantMessageError  `json:"error,omitempty"`
 }
 
 // Type returns the message type for AssistantMessage.
@@ -247,16 +260,17 @@ func (m *SystemMessage) UnmarshalJSON(data []byte) error {
 
 // ResultMessage represents the final result of a conversation turn.
 type ResultMessage struct {
-	MessageType   string          `json:"type"`
-	Subtype       string          `json:"subtype"`
-	DurationMs    int             `json:"duration_ms"`
-	DurationAPIMs int             `json:"duration_api_ms"`
-	IsError       bool            `json:"is_error"`
-	NumTurns      int             `json:"num_turns"`
-	SessionID     string          `json:"session_id"`
-	TotalCostUSD  *float64        `json:"total_cost_usd,omitempty"`
-	Usage         *map[string]any `json:"usage,omitempty"`
-	Result        *string         `json:"result,omitempty"` // Note: Python SDK uses string type
+	MessageType      string          `json:"type"`
+	Subtype          string          `json:"subtype"`
+	DurationMs       int             `json:"duration_ms"`
+	DurationAPIMs    int             `json:"duration_api_ms"`
+	IsError          bool            `json:"is_error"`
+	NumTurns         int             `json:"num_turns"`
+	SessionID        string          `json:"session_id"`
+	TotalCostUSD     *float64        `json:"total_cost_usd,omitempty"`
+	Usage            *map[string]any `json:"usage,omitempty"`
+	Result           *string         `json:"result,omitempty"`           // Note: Python SDK uses string type
+	StructuredOutput interface{}     `json:"structured_output,omitempty"` // Structured output when using JSON schema
 }
 
 // Type returns the message type for ResultMessage.
