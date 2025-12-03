@@ -985,3 +985,174 @@ func TestSystemPromptDefaultBehavior(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildSettingsValue tests the sandbox settings merging logic
+func TestBuildSettingsValue(t *testing.T) {
+	t.Run("sandbox_only", func(t *testing.T) {
+		options := &shared.Options{
+			Sandbox: &shared.SandboxSettings{
+				Enabled:                  true,
+				AutoAllowBashIfSandboxed: true,
+				Network: &shared.SandboxNetworkConfig{
+					AllowLocalBinding: true,
+					AllowUnixSockets:  []string{"/var/run/docker.sock"},
+				},
+			},
+		}
+
+		result := buildSettingsValue(options)
+		if result == "" {
+			t.Fatal("Expected non-empty settings value")
+		}
+
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("Failed to parse result as JSON: %v", err)
+		}
+
+		sandbox, ok := parsed["sandbox"].(map[string]interface{})
+		if !ok {
+			t.Fatal("Expected sandbox key in parsed result")
+		}
+
+		if sandbox["enabled"] != true {
+			t.Error("Expected enabled to be true")
+		}
+		if sandbox["autoAllowBashIfSandboxed"] != true {
+			t.Error("Expected autoAllowBashIfSandboxed to be true")
+		}
+
+		network, ok := sandbox["network"].(map[string]interface{})
+		if !ok {
+			t.Fatal("Expected network key in sandbox")
+		}
+		if network["allowLocalBinding"] != true {
+			t.Error("Expected allowLocalBinding to be true")
+		}
+	})
+
+	t.Run("sandbox_and_settings_json", func(t *testing.T) {
+		existingSettings := `{"permissions": {"allow": ["Bash(ls:*)"]}, "verbose": true}`
+		options := &shared.Options{
+			Settings: &existingSettings,
+			Sandbox: &shared.SandboxSettings{
+				Enabled:          true,
+				ExcludedCommands: []string{"git", "docker"},
+			},
+		}
+
+		result := buildSettingsValue(options)
+		if result == "" {
+			t.Fatal("Expected non-empty settings value")
+		}
+
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("Failed to parse result as JSON: %v", err)
+		}
+
+		// Original settings should be preserved
+		permissions, ok := parsed["permissions"].(map[string]interface{})
+		if !ok {
+			t.Fatal("Expected permissions key to be preserved")
+		}
+		if parsed["verbose"] != true {
+			t.Error("Expected verbose to be preserved")
+		}
+		_ = permissions // Used above
+
+		// Sandbox should be merged in
+		sandbox, ok := parsed["sandbox"].(map[string]interface{})
+		if !ok {
+			t.Fatal("Expected sandbox key in parsed result")
+		}
+		if sandbox["enabled"] != true {
+			t.Error("Expected enabled to be true")
+		}
+	})
+
+	t.Run("settings_file_path_no_sandbox", func(t *testing.T) {
+		settingsPath := "/path/to/settings.json"
+		options := &shared.Options{
+			Settings: &settingsPath,
+		}
+
+		result := buildSettingsValue(options)
+		if result != settingsPath {
+			t.Errorf("Expected path to be passed through, got %s", result)
+		}
+	})
+
+	t.Run("sandbox_minimal", func(t *testing.T) {
+		options := &shared.Options{
+			Sandbox: &shared.SandboxSettings{
+				Enabled: true,
+			},
+		}
+
+		result := buildSettingsValue(options)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("Failed to parse result as JSON: %v", err)
+		}
+
+		sandbox, ok := parsed["sandbox"].(map[string]interface{})
+		if !ok {
+			t.Fatal("Expected sandbox key")
+		}
+		if sandbox["enabled"] != true {
+			t.Error("Expected enabled to be true")
+		}
+	})
+
+	t.Run("sandbox_network_config", func(t *testing.T) {
+		options := &shared.Options{
+			Sandbox: &shared.SandboxSettings{
+				Enabled: true,
+				Network: &shared.SandboxNetworkConfig{
+					AllowUnixSockets:    []string{"/tmp/ssh-agent.sock"},
+					AllowAllUnixSockets: false,
+					AllowLocalBinding:   true,
+					HTTPProxyPort:       8080,
+					SOCKSProxyPort:      8081,
+				},
+			},
+		}
+
+		result := buildSettingsValue(options)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("Failed to parse result as JSON: %v", err)
+		}
+
+		sandbox := parsed["sandbox"].(map[string]interface{})
+		network := sandbox["network"].(map[string]interface{})
+
+		sockets, ok := network["allowUnixSockets"].([]interface{})
+		if !ok || len(sockets) != 1 || sockets[0] != "/tmp/ssh-agent.sock" {
+			t.Error("Expected allowUnixSockets to contain /tmp/ssh-agent.sock")
+		}
+		// allowAllUnixSockets=false is omitted due to omitempty
+		if val, exists := network["allowAllUnixSockets"]; exists && val != false {
+			t.Error("Expected allowAllUnixSockets to be false or omitted")
+		}
+		if network["allowLocalBinding"] != true {
+			t.Error("Expected allowLocalBinding to be true")
+		}
+		if network["httpProxyPort"] != float64(8080) {
+			t.Errorf("Expected httpProxyPort to be 8080, got %v", network["httpProxyPort"])
+		}
+		if network["socksProxyPort"] != float64(8081) {
+			t.Errorf("Expected socksProxyPort to be 8081, got %v", network["socksProxyPort"])
+		}
+	})
+
+	t.Run("no_settings_no_sandbox", func(t *testing.T) {
+		options := &shared.Options{}
+
+		result := buildSettingsValue(options)
+		if result != "" {
+			t.Errorf("Expected empty string, got %s", result)
+		}
+	})
+}

@@ -149,8 +149,8 @@ type HookCallback func(input HookInput, toolUseID *string, ctx HookContext) (Hoo
 // HookMatcher configures hook callbacks for specific patterns.
 type HookMatcher struct {
 	Matcher string         `json:"matcher"`
-	Hooks   []HookCallback `json:"-"`     // Not serialized, handled by SDK
-	Timeout *int           `json:"timeout,omitempty"` // Timeout in seconds for all hooks in this matcher
+	Hooks   []HookCallback `json:"-"`        // Not serialized, handled by SDK
+	Timeout *float64       `json:"timeout,omitempty"` // Timeout in seconds for all hooks in this matcher
 }
 
 // Permission decision constants

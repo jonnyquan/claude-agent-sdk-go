@@ -58,12 +58,24 @@ type HookCallback = claudesdk.HookCallback
 type PluginConfig = claudesdk.PluginConfig
 type PluginType = claudesdk.PluginType
 
+// Sandbox types
+// Deprecated: Use claudesdk types instead.
+type SandboxSettings = claudesdk.SandboxSettings
+type SandboxNetworkConfig = claudesdk.SandboxNetworkConfig
+type SandboxIgnoreViolations = claudesdk.SandboxIgnoreViolations
+
 // Content types
 // Deprecated: Use claudesdk types instead.
 type TextBlock = claudesdk.TextBlock
 type ResultMessage = claudesdk.ResultMessage
 type ToolContent = claudesdk.ToolContent
 type ToolDef = claudesdk.ToolDef
+type ContentBlock = claudesdk.ContentBlock
+type SystemMessage = claudesdk.SystemMessage
+
+// Permission types
+// Deprecated: Use claudesdk types instead.
+type PermissionMode = claudesdk.PermissionMode
 
 // MCP types
 // Deprecated: Use claudesdk types instead.
@@ -86,6 +98,11 @@ const (
 	PermissionDecisionAllow = claudesdk.PermissionDecisionAllow
 	PermissionDecisionDeny  = claudesdk.PermissionDecisionDeny
 	PermissionDecisionAsk   = claudesdk.PermissionDecisionAsk
+	
+	// Permission modes
+	PermissionModeDefault          = claudesdk.PermissionModeDefault
+	PermissionModeAcceptEdits      = claudesdk.PermissionModeAcceptEdits
+	PermissionModeBypassPermissions = claudesdk.PermissionModeBypassPermissions
 )
 
 // Re-export main functions
@@ -137,6 +154,30 @@ var WithMaxBudgetUSD = claudesdk.WithMaxBudgetUSD
 // WithMaxThinkingTokens sets the maximum thinking tokens.
 // Deprecated: Use claudesdk.WithMaxThinkingTokens instead.
 var WithMaxThinkingTokens = claudesdk.WithMaxThinkingTokens
+
+// WithResume resumes a previous session.
+// Deprecated: Use claudesdk.WithResume instead.
+var WithResume = claudesdk.WithResume
+
+// WithPermissionMode sets the permission mode.
+// Deprecated: Use claudesdk.WithPermissionMode instead.
+var WithPermissionMode = claudesdk.WithPermissionMode
+
+// WithMaxTurns sets the maximum number of conversation turns.
+// Deprecated: Use claudesdk.WithMaxTurns instead.
+var WithMaxTurns = claudesdk.WithMaxTurns
+
+// WithEnv sets environment variables for the subprocess.
+// Deprecated: Use claudesdk.WithEnv instead.
+var WithEnv = claudesdk.WithEnv
+
+// WithEnvVar sets a single environment variable.
+// Deprecated: Use claudesdk.WithEnvVar instead.
+var WithEnvVar = claudesdk.WithEnvVar
+
+// WithSandbox configures sandbox settings.
+// Deprecated: Use claudesdk.WithSandbox instead.
+var WithSandbox = claudesdk.WithSandbox
 
 // Additional utility functions
 

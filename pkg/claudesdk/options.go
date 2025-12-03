@@ -34,6 +34,11 @@ type PluginType = shared.PluginType
 // PluginConfig represents plugin configuration.
 type PluginConfig = shared.PluginConfig
 
+// Sandbox configuration types
+type SandboxSettings = shared.SandboxSettings
+type SandboxNetworkConfig = shared.SandboxNetworkConfig
+type SandboxIgnoreViolations = shared.SandboxIgnoreViolations
+
 // Re-export constants
 const (
 	PermissionModeDefault           = shared.PermissionModeDefault
@@ -254,6 +259,14 @@ func WithSettings(settings string) Option {
 	}
 }
 
+// WithSandbox configures sandbox settings for bash command isolation.
+// When sandbox is provided, it will be merged into the settings passed to CLI.
+func WithSandbox(sandbox *SandboxSettings) Option {
+	return func(o *Options) {
+		o.Sandbox = sandbox
+	}
+}
+
 // WithExtraArgs sets arbitrary CLI flags via ExtraArgs.
 func WithExtraArgs(args map[string]*string) Option {
 	return func(o *Options) {
@@ -355,7 +368,13 @@ func NewOptions(opts ...Option) *Options {
 }
 
 // IntPtr returns a pointer to the given int value.
-// Useful for optional timeout fields in hooks.
+// Useful for optional integer fields.
 func IntPtr(i int) *int {
 	return &i
+}
+
+// Float64Ptr returns a pointer to the given float64 value.
+// Useful for optional timeout fields in hooks.
+func Float64Ptr(f float64) *float64 {
+	return &f
 }

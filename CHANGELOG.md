@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.10
+
+### Features
+
+- **Sandbox Configuration Support**: Added sandbox settings for bash command isolation
+  - New `SandboxSettings` type for configuring sandbox behavior
+  - New `SandboxNetworkConfig` type for network settings in sandbox
+  - New `SandboxIgnoreViolations` type for specifying violations to ignore
+  - New `WithSandbox(sandbox *SandboxSettings)` functional option
+  - Sandbox settings are merged into CLI settings when provided
+  - Supports all sandbox options: enabled, autoAllowBashIfSandboxed, excludedCommands, network, etc.
+
+### Internal/Other Changes
+
+- Updated bundled Claude CLI to version 2.0.57
+- Changed `HookMatcher.Timeout` type from `*int` to `*float64` for consistency with Python SDK
+
 ## 0.1.9
 
 ### Features

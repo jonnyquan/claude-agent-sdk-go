@@ -91,7 +91,7 @@ type InitializeRequest struct {
 type HookMatcherConfig struct {
 	Matcher         string   `json:"matcher"`
 	HookCallbackIDs []string `json:"hookCallbackIds"`
-	Timeout         *int     `json:"timeout,omitempty"`
+	Timeout         *float64 `json:"timeout,omitempty"`
 }
 
 // CanUseToolRequest represents a tool permission request from CLI.

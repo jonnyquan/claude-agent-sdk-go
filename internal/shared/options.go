@@ -81,6 +81,11 @@ type Options struct {
 	// OutputFormat for structured outputs (JSON Schema validation)
 	// Example: map[string]interface{}{"type": "json_schema", "schema": {...}}
 	OutputFormat map[string]interface{} `json:"output_format,omitempty"`
+
+	// Sandbox configuration for bash command isolation.
+	// Filesystem and network restrictions are derived from permission rules (Read/Edit/WebFetch),
+	// not from these sandbox settings.
+	Sandbox *SandboxSettings `json:"sandbox,omitempty"`
 }
 
 // AgentDefinition configures a named agent available to the CLI.
@@ -103,6 +108,57 @@ const (
 type PluginConfig struct {
 	Type PluginType `json:"type"`
 	Path string     `json:"path"`
+}
+
+// SandboxNetworkConfig configures network settings for sandbox.
+type SandboxNetworkConfig struct {
+	// AllowUnixSockets specifies Unix socket paths accessible in sandbox (e.g., SSH agents).
+	AllowUnixSockets []string `json:"allowUnixSockets,omitempty"`
+	// AllowAllUnixSockets allows all Unix sockets (less secure).
+	AllowAllUnixSockets bool `json:"allowAllUnixSockets,omitempty"`
+	// AllowLocalBinding allows binding to localhost ports (macOS only).
+	AllowLocalBinding bool `json:"allowLocalBinding,omitempty"`
+	// HTTPProxyPort is the HTTP proxy port if bringing your own proxy.
+	HTTPProxyPort int `json:"httpProxyPort,omitempty"`
+	// SOCKSProxyPort is the SOCKS5 proxy port if bringing your own proxy.
+	SOCKSProxyPort int `json:"socksProxyPort,omitempty"`
+}
+
+// SandboxIgnoreViolations specifies violations to ignore in sandbox.
+type SandboxIgnoreViolations struct {
+	// File paths for which violations should be ignored.
+	File []string `json:"file,omitempty"`
+	// Network hosts for which violations should be ignored.
+	Network []string `json:"network,omitempty"`
+}
+
+// SandboxSettings configures sandbox behavior for bash command isolation.
+//
+// This controls how Claude Code sandboxes bash commands for filesystem
+// and network isolation.
+//
+// Important: Filesystem and network restrictions are configured via permission
+// rules, not via these sandbox settings:
+//   - Filesystem read restrictions: Use Read deny rules
+//   - Filesystem write restrictions: Use Edit allow/deny rules
+//   - Network restrictions: Use WebFetch allow/deny rules
+type SandboxSettings struct {
+	// Enabled enables bash sandboxing (macOS/Linux only). Default: false
+	Enabled bool `json:"enabled,omitempty"`
+	// AutoAllowBashIfSandboxed auto-approves bash commands when sandboxed. Default: true
+	AutoAllowBashIfSandboxed bool `json:"autoAllowBashIfSandboxed,omitempty"`
+	// ExcludedCommands lists commands that should run outside the sandbox (e.g., ["git", "docker"])
+	ExcludedCommands []string `json:"excludedCommands,omitempty"`
+	// AllowUnsandboxedCommands allows commands to bypass sandbox via dangerouslyDisableSandbox.
+	// When false, all commands must run sandboxed (or be in excludedCommands). Default: true
+	AllowUnsandboxedCommands bool `json:"allowUnsandboxedCommands,omitempty"`
+	// Network configures network settings for sandbox.
+	Network *SandboxNetworkConfig `json:"network,omitempty"`
+	// IgnoreViolations specifies violations to ignore.
+	IgnoreViolations *SandboxIgnoreViolations `json:"ignoreViolations,omitempty"`
+	// EnableWeakerNestedSandbox enables weaker sandbox for unprivileged Docker environments
+	// (Linux only). Reduces security. Default: false
+	EnableWeakerNestedSandbox bool `json:"enableWeakerNestedSandbox,omitempty"`
 }
 
 // McpServerType represents the type of MCP server.

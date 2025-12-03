@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -72,31 +73,54 @@ type Transport struct {
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	tempFiles []string // Track temporary files for cleanup
+
+	// Track first result for proper stream closure with SDK MCP servers
+	firstResultReceived chan struct{}
+	firstResultOnce     sync.Once
+	streamCloseTimeout  time.Duration
 }
 
 // New creates a new subprocess transport.
 func New(cliPath string, options *shared.Options, closeStdin bool, entrypoint string, sdkVersion string) *Transport {
 	return &Transport{
-		cliPath:    cliPath,
-		options:    options,
-		closeStdin: closeStdin,
-		entrypoint: entrypoint,
-		sdkVersion: sdkVersion,
-		parser:     parser.New(),
+		cliPath:             cliPath,
+		options:             options,
+		closeStdin:          closeStdin,
+		entrypoint:          entrypoint,
+		sdkVersion:          sdkVersion,
+		parser:              parser.New(),
+		firstResultReceived: make(chan struct{}),
+		streamCloseTimeout:  getStreamCloseTimeout(),
 	}
 }
 
 // NewWithPrompt creates a new subprocess transport for one-shot queries with prompt as CLI argument.
 func NewWithPrompt(cliPath string, options *shared.Options, prompt string, sdkVersion string) *Transport {
 	return &Transport{
-		cliPath:    cliPath,
-		options:    options,
-		closeStdin: true,
-		entrypoint: "sdk-go", // Query mode uses sdk-go
-		sdkVersion: sdkVersion,
-		parser:     parser.New(),
-		promptArg:  &prompt,
+		cliPath:             cliPath,
+		options:             options,
+		closeStdin:          true,
+		entrypoint:          "sdk-go", // Query mode uses sdk-go
+		sdkVersion:          sdkVersion,
+		parser:              parser.New(),
+		promptArg:           &prompt,
+		firstResultReceived: make(chan struct{}),
+		streamCloseTimeout:  getStreamCloseTimeout(),
 	}
+}
+
+// getStreamCloseTimeout returns the stream close timeout from environment variable.
+// Default is 60 seconds. Environment variable is in milliseconds.
+func getStreamCloseTimeout() time.Duration {
+	timeoutMs := os.Getenv("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT")
+	if timeoutMs == "" {
+		return 60 * time.Second // Default 60 seconds
+	}
+	ms, err := strconv.ParseInt(timeoutMs, 10, 64)
+	if err != nil {
+		return 60 * time.Second
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // IsConnected returns whether the transport is currently connected.
@@ -278,12 +302,42 @@ func (t *Transport) SendMessage(ctx context.Context, message shared.StreamMessag
 	}
 
 	// For one-shot mode, close stdin after sending the message
+	// If we have SDK MCP servers or hooks that need bidirectional communication,
+	// wait for first result before closing stdin
 	if t.closeStdin {
+		hasHooks := t.options != nil && len(t.options.Hooks) > 0
+		hasSdkMcpServers := t.hasSdkMcpServers()
+
+		if hasHooks || hasSdkMcpServers {
+			// Wait for first result before closing stdin
+			select {
+			case <-t.firstResultReceived:
+				// Received first result, safe to close
+			case <-time.After(t.streamCloseTimeout):
+				// Timeout, close anyway
+			case <-ctx.Done():
+				// Context canceled
+			}
+		}
+
 		_ = t.stdin.Close()
 		t.stdin = nil
 	}
 
 	return nil
+}
+
+// hasSdkMcpServers checks if there are any SDK MCP servers configured.
+func (t *Transport) hasSdkMcpServers() bool {
+	if t.options == nil || len(t.options.McpServers) == 0 {
+		return false
+	}
+	for _, server := range t.options.McpServers {
+		if server != nil && server.GetType() == shared.McpServerTypeSDK {
+			return true
+		}
+	}
+	return false
 }
 
 // ReceiveMessages returns channels for receiving messages and errors.
@@ -460,6 +514,13 @@ func (t *Transport) handleStdout() {
 		// Send parsed messages
 		for _, msg := range messages {
 			if msg != nil {
+				// Track results for proper stream closure
+				if _, isResult := msg.(*shared.ResultMessage); isResult {
+					t.firstResultOnce.Do(func() {
+						close(t.firstResultReceived)
+					})
+				}
+
 				select {
 				case t.msgChan <- msg:
 				case <-t.ctx.Done():

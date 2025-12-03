@@ -233,10 +233,83 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	if options.MaxBudgetUSD != nil {
 		cmd = append(cmd, "--max-budget-usd", fmt.Sprintf("%.4f", *options.MaxBudgetUSD))
 	}
-	if options.Settings != nil {
-		cmd = append(cmd, "--settings", *options.Settings)
+	
+	// Handle settings and sandbox: merge sandbox into settings if both are provided
+	settingsValue := buildSettingsValue(options)
+	if settingsValue != "" {
+		cmd = append(cmd, "--settings", settingsValue)
 	}
+	
 	return cmd
+}
+
+// buildSettingsValue builds the settings value, merging sandbox settings if provided.
+// Returns the settings value as either:
+//   - A JSON string (if sandbox is provided or settings is JSON)
+//   - A file path (if only settings path is provided without sandbox)
+//   - Empty string if neither settings nor sandbox is provided
+func buildSettingsValue(options *shared.Options) string {
+	hasSettings := options.Settings != nil
+	hasSandbox := options.Sandbox != nil
+
+	if !hasSettings && !hasSandbox {
+		return ""
+	}
+
+	// If only settings path and no sandbox, pass through as-is
+	if hasSettings && !hasSandbox {
+		return *options.Settings
+	}
+
+	// If we have sandbox settings, we need to merge into a JSON object
+	settingsObj := make(map[string]interface{})
+
+	if hasSettings {
+		settingsStr := strings.TrimSpace(*options.Settings)
+		// Check if settings is a JSON string or a file path
+		if strings.HasPrefix(settingsStr, "{") && strings.HasSuffix(settingsStr, "}") {
+			// Parse JSON string
+			if err := json.Unmarshal([]byte(settingsStr), &settingsObj); err != nil {
+				// If parsing fails, try to read as file path
+				fmt.Fprintf(os.Stderr, "Warning: Failed to parse settings as JSON, treating as file path: %s\n", settingsStr)
+				settingsObj = readSettingsFile(settingsStr)
+			}
+		} else {
+			// It's a file path - read and parse
+			settingsObj = readSettingsFile(settingsStr)
+		}
+	}
+
+	// Merge sandbox settings
+	if hasSandbox {
+		settingsObj["sandbox"] = options.Sandbox
+	}
+
+	// Serialize to JSON
+	data, err := json.Marshal(settingsObj)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to marshal settings: %v\n", err)
+		return ""
+	}
+
+	return string(data)
+}
+
+// readSettingsFile reads and parses a settings JSON file.
+func readSettingsFile(path string) map[string]interface{} {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Settings file not found: %s\n", path)
+		return make(map[string]interface{})
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(data, &result); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to parse settings file: %v\n", err)
+		return make(map[string]interface{})
+	}
+
+	return result
 }
 
 func addFileSystemFlags(cmd []string, options *shared.Options) []string {
