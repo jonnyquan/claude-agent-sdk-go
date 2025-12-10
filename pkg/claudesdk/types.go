@@ -85,4 +85,5 @@ type Transport interface {
 	ReceiveMessages(ctx context.Context) (<-chan Message, <-chan error)
 	Interrupt(ctx context.Context) error
 	Close() error
+	RewindFiles(ctx context.Context, userMessageID string) error
 }

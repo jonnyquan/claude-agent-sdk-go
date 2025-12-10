@@ -81,11 +81,17 @@ type PermissionMode = claudesdk.PermissionMode
 // Deprecated: Use claudesdk types instead.
 type McpServerConfig = claudesdk.McpServerConfig
 
+// Beta and Tools types
+// Deprecated: Use claudesdk types instead.
+type SdkBeta = claudesdk.SdkBeta
+type ToolsPreset = claudesdk.ToolsPreset
+type ToolsOption = claudesdk.ToolsOption
+
 // Constants
 // Deprecated: Use claudesdk constants instead.
 const (
 	PluginTypeLocal = claudesdk.PluginTypeLocal
-	
+
 	// Hook events
 	HookEventPreToolUse       = claudesdk.HookEventPreToolUse
 	HookEventPostToolUse      = claudesdk.HookEventPostToolUse
@@ -93,16 +99,19 @@ const (
 	HookEventStop             = claudesdk.HookEventStop
 	HookEventSubagentStop     = claudesdk.HookEventSubagentStop
 	HookEventPreCompact       = claudesdk.HookEventPreCompact
-	
+
 	// Permission decisions
 	PermissionDecisionAllow = claudesdk.PermissionDecisionAllow
 	PermissionDecisionDeny  = claudesdk.PermissionDecisionDeny
 	PermissionDecisionAsk   = claudesdk.PermissionDecisionAsk
-	
+
 	// Permission modes
-	PermissionModeDefault          = claudesdk.PermissionModeDefault
-	PermissionModeAcceptEdits      = claudesdk.PermissionModeAcceptEdits
+	PermissionModeDefault           = claudesdk.PermissionModeDefault
+	PermissionModeAcceptEdits       = claudesdk.PermissionModeAcceptEdits
 	PermissionModeBypassPermissions = claudesdk.PermissionModeBypassPermissions
+
+	// Beta features
+	SdkBetaContext1M = claudesdk.SdkBetaContext1M
 )
 
 // Re-export main functions
@@ -178,6 +187,18 @@ var WithEnvVar = claudesdk.WithEnvVar
 // WithSandbox configures sandbox settings.
 // Deprecated: Use claudesdk.WithSandbox instead.
 var WithSandbox = claudesdk.WithSandbox
+
+// WithTools sets the base set of available tools.
+// Deprecated: Use claudesdk.WithTools instead.
+var WithTools = claudesdk.WithTools
+
+// WithBetas enables Anthropic API beta features.
+// Deprecated: Use claudesdk.WithBetas instead.
+var WithBetas = claudesdk.WithBetas
+
+// WithEnableFileCheckpointing enables file checkpointing.
+// Deprecated: Use claudesdk.WithEnableFileCheckpointing instead.
+var WithEnableFileCheckpointing = claudesdk.WithEnableFileCheckpointing
 
 // Additional utility functions
 

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.1.14
+
+### New Features
+
+- **Tools Option**: Added `tools` option to Options for controlling the base set of available tools
+  - Array of tool names to specify which tools should be available (e.g., `[]string{"Read", "Edit", "Bash"}`)
+  - Empty array `[]string{}` to disable all built-in tools
+  - Preset object `ToolsPreset{Type: "preset", Preset: "claude_code"}` to use the default Claude Code toolset
+  - New `WithTools(tools ToolsOption)` functional option
+
+- **SDK Beta Support**: Added `betas` option for enabling Anthropic API beta features
+  - New `SdkBeta` type with `SdkBetaContext1M` constant for extended context window
+  - New `Betas` field in Options (`[]SdkBeta`)
+  - New `WithBetas(betas ...SdkBeta)` functional option
+
+- **File Checkpointing**: Added file checkpointing support for tracking file changes
+  - New `EnableFileCheckpointing` field in Options
+  - New `WithEnableFileCheckpointing(enable bool)` functional option
+  - New `RewindFiles(ctx, userMessageID)` method on Client interface
+  - Enables rewinding tracked files to their state at any user message
+
+### Bug Fixes
+
+- **Faster Error Handling**: Added `FailPendingRequests()` method to control protocol for propagating CLI errors to pending requests immediately instead of waiting for timeout
+
+### Internal/Other Changes
+
+- Updated SDK version to 0.1.14
+- Updated bundled Claude CLI to version 2.0.62
+
+### Alignment
+
+- **100% Feature Parity** with Python SDK 0.1.14
+  - Both SDKs now have tools option support
+  - Both SDKs now have SDK beta support
+  - Both SDKs now have file checkpointing and rewind_files support
+  - Both SDKs now have faster error propagation for pending requests
+
 ## 0.1.10
 
 ### Features

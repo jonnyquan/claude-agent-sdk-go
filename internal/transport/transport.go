@@ -321,6 +321,23 @@ func (t *Transport) Interrupt(_ context.Context) error {
 	return t.cmd.Process.Signal(os.Interrupt)
 }
 
+// RewindFiles rewinds tracked files to their state at a specific user message.
+// Requires file checkpointing to be enabled via the EnableFileCheckpointing option.
+func (t *Transport) RewindFiles(_ context.Context, userMessageID string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if !t.connected {
+		return fmt.Errorf("transport not connected")
+	}
+
+	if t.controlProtocol == nil {
+		return fmt.Errorf("control protocol not initialized - streaming mode required")
+	}
+
+	return t.controlProtocol.RewindFiles(userMessageID)
+}
+
 // Close terminates the subprocess connection.
 func (t *Transport) Close() error {
 	t.mu.Lock()
@@ -470,8 +487,13 @@ func (t *Transport) handleStdout() {
 	}
 
 	if err := scanner.Err(); err != nil {
+		scanErr := fmt.Errorf("stdout scanner error: %w", err)
+		// Signal all pending control requests so they fail fast instead of timing out
+		if t.controlProtocol != nil {
+			t.controlProtocol.FailPendingRequests(scanErr)
+		}
 		select {
-		case t.errChan <- fmt.Errorf("stdout scanner error: %w", err):
+		case t.errChan <- scanErr:
 		case <-t.ctx.Done():
 		}
 	}

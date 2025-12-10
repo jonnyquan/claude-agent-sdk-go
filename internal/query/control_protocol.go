@@ -373,10 +373,38 @@ func (cp *ControlProtocol) generateRequestID() string {
 	return fmt.Sprintf("req_%d_%d", cp.requestCounter, time.Now().UnixNano())
 }
 
+// RewindFiles sends a rewind_files request to the CLI.
+// Requires file checkpointing to be enabled via the EnableFileCheckpointing option.
+func (cp *ControlProtocol) RewindFiles(userMessageID string) error {
+	request := map[string]any{
+		"subtype":         shared.ControlSubtypeRewindFiles,
+		"user_message_id": userMessageID,
+	}
+
+	_, err := cp.sendControlRequest(request, 60*time.Second)
+	return err
+}
+
+// FailPendingRequests signals all pending control requests to fail with the given error.
+// This is called when a fatal error occurs in the message reader to propagate errors
+// immediately instead of waiting for timeouts.
+func (cp *ControlProtocol) FailPendingRequests(err error) {
+	cp.responseMu.Lock()
+	defer cp.responseMu.Unlock()
+
+	for _, pending := range cp.pendingResponses {
+		select {
+		case pending.err <- err:
+		default:
+			// Channel already has an error or is closed
+		}
+	}
+}
+
 // Close closes the control protocol handler.
 func (cp *ControlProtocol) Close() error {
 	cp.cancel()
-	
+
 	// Cancel all pending responses
 	cp.responseMu.Lock()
 	for _, pending := range cp.pendingResponses {
@@ -386,6 +414,6 @@ func (cp *ControlProtocol) Close() error {
 	}
 	cp.pendingResponses = make(map[string]*pendingControlResponse)
 	cp.responseMu.Unlock()
-	
+
 	return nil
 }

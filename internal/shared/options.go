@@ -21,18 +21,41 @@ const (
 	PermissionModeBypassPermissions PermissionMode = "bypassPermissions"
 )
 
+// SdkBeta represents SDK beta feature identifiers.
+// See https://docs.anthropic.com/en/api/beta-headers
+type SdkBeta string
+
+const (
+	// SdkBetaContext1M enables extended context window (1M tokens).
+	SdkBetaContext1M SdkBeta = "context-1m-2025-08-07"
+)
+
+// ToolsPreset represents a preset configuration for available tools.
+type ToolsPreset struct {
+	Type   string `json:"type"`   // Always "preset"
+	Preset string `json:"preset"` // Preset name, e.g., "claude_code"
+}
+
+// ToolsOption can be either a list of tool names or a preset.
+// Use nil for default behavior, empty slice to disable all tools,
+// slice with tool names to specify which tools are available,
+// or ToolsPreset for preset configuration.
+type ToolsOption interface{}
+
 // Options configures the Claude Code SDK behavior.
 type Options struct {
 	// Tool Control
-	AllowedTools    []string `json:"allowed_tools,omitempty"`
-	DisallowedTools []string `json:"disallowed_tools,omitempty"`
+	Tools           ToolsOption `json:"tools,omitempty"` // Base set of available tools
+	AllowedTools    []string    `json:"allowed_tools,omitempty"`
+	DisallowedTools []string    `json:"disallowed_tools,omitempty"`
 
 	// System Prompts & Model
-	SystemPrompt       *string `json:"system_prompt,omitempty"`
-	AppendSystemPrompt *string `json:"append_system_prompt,omitempty"`
-	Model              *string `json:"model,omitempty"`
-	FallbackModel      *string `json:"fallback_model,omitempty"`
-	MaxThinkingTokens  int     `json:"max_thinking_tokens,omitempty"`
+	SystemPrompt       *string   `json:"system_prompt,omitempty"`
+	AppendSystemPrompt *string   `json:"append_system_prompt,omitempty"`
+	Model              *string   `json:"model,omitempty"`
+	FallbackModel      *string   `json:"fallback_model,omitempty"`
+	MaxThinkingTokens  int       `json:"max_thinking_tokens,omitempty"`
+	Betas              []SdkBeta `json:"betas,omitempty"` // Beta features to enable
 
 	// Permission & Safety System
 	PermissionMode           *PermissionMode `json:"permission_mode,omitempty"`
@@ -86,6 +109,10 @@ type Options struct {
 	// Filesystem and network restrictions are derived from permission rules (Read/Edit/WebFetch),
 	// not from these sandbox settings.
 	Sandbox *SandboxSettings `json:"sandbox,omitempty"`
+
+	// EnableFileCheckpointing enables file checkpointing to track file changes during the session.
+	// When enabled, files can be rewound to their state at any user message using Client.RewindFiles().
+	EnableFileCheckpointing bool `json:"enable_file_checkpointing,omitempty"`
 }
 
 // AgentDefinition configures a named agent available to the CLI.

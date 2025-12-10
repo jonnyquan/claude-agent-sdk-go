@@ -15,6 +15,7 @@ const (
 	ControlSubtypeCanUseTool   = "can_use_tool"
 	ControlSubtypeHookCallback = "hook_callback"
 	ControlSubtypeMCPMessage   = "mcp_message"
+	ControlSubtypeRewindFiles  = "rewind_files"
 )
 
 // Control response subtypes
@@ -121,6 +122,12 @@ type PermissionResponse struct {
 
 // HookCallbackResponse represents the response to hook_callback request.
 type HookCallbackResponse map[string]any
+
+// RewindFilesRequest represents a request to rewind tracked files to a specific user message state.
+type RewindFilesRequest struct {
+	Subtype       string `json:"subtype"`         // "rewind_files"
+	UserMessageID string `json:"user_message_id"` // UUID of the user message to rewind to
+}
 
 // Helper functions for JSON marshaling/unmarshaling
 func marshalJSON(v any) ([]byte, error) {

@@ -22,6 +22,7 @@ type Client interface {
 	ReceiveMessages(ctx context.Context) <-chan Message
 	ReceiveResponse(ctx context.Context) MessageIterator
 	Interrupt(ctx context.Context) error
+	RewindFiles(ctx context.Context, userMessageID string) error
 }
 
 // ClientImpl implements the Client interface.
@@ -419,6 +420,39 @@ func (c *ClientImpl) Interrupt(ctx context.Context) error {
 	}
 
 	return transport.Interrupt(ctx)
+}
+
+// RewindFiles rewinds tracked files to their state at a specific user message.
+//
+// Requires file checkpointing to be enabled via the WithEnableFileCheckpointing(true) option
+// when creating the Client.
+//
+// Parameters:
+//   - userMessageID: UUID of the user message to rewind to. This should be
+//     the UUID field from a UserMessage received during the conversation.
+//
+// Example:
+//
+//	client := claudesdk.NewClient(claudesdk.WithEnableFileCheckpointing(true))
+//	// ... after making changes ...
+//	err := client.RewindFiles(ctx, checkpointID)
+func (c *ClientImpl) RewindFiles(ctx context.Context, userMessageID string) error {
+	// Check context before proceeding
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Check connection status with read lock
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return fmt.Errorf("client not connected")
+	}
+
+	return transport.RewindFiles(ctx, userMessageID)
 }
 
 // clientIterator implements MessageIterator for client message reception

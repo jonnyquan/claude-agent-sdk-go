@@ -28,6 +28,15 @@ type McpHTTPServerConfig = shared.McpHTTPServerConfig
 // McpSdkServerConfig represents an SDK MCP server configuration.
 type McpSdkServerConfig = shared.McpSdkServerConfig
 
+// SdkBeta represents SDK beta feature identifiers.
+type SdkBeta = shared.SdkBeta
+
+// ToolsPreset represents a preset configuration for available tools.
+type ToolsPreset = shared.ToolsPreset
+
+// ToolsOption can be either a list of tool names or a preset.
+type ToolsOption = shared.ToolsOption
+
 // PluginType defines the type of plugin.
 type PluginType = shared.PluginType
 
@@ -50,10 +59,28 @@ const (
 	McpServerTypeHTTP               = shared.McpServerTypeHTTP
 	McpServerTypeSDK                = shared.McpServerTypeSDK
 	PluginTypeLocal                 = shared.PluginTypeLocal
+	// Beta features
+	SdkBetaContext1M = shared.SdkBetaContext1M
 )
 
 // Option configures Options using the functional options pattern.
 type Option func(*Options)
+
+// WithTools sets the base set of available tools.
+// Pass nil for default behavior, empty slice to disable all tools,
+// slice with tool names to specify which tools are available,
+// or ToolsPreset for preset configuration (e.g., claude_code).
+//
+// Examples:
+//
+//	WithTools([]string{"Read", "Edit", "Bash"})  // Specific tools only
+//	WithTools([]string{})                        // Disable all built-in tools
+//	WithTools(ToolsPreset{Type: "preset", Preset: "claude_code"}) // Use preset
+func WithTools(tools ToolsOption) Option {
+	return func(o *Options) {
+		o.Tools = tools
+	}
+}
 
 // WithAllowedTools sets the allowed tools list.
 func WithAllowedTools(tools ...string) Option {
@@ -87,6 +114,18 @@ func WithAppendSystemPrompt(prompt string) Option {
 func WithModel(model string) Option {
 	return func(o *Options) {
 		o.Model = &model
+	}
+}
+
+// WithBetas enables Anthropic API beta features.
+// See https://docs.anthropic.com/en/api/beta-headers for available betas.
+//
+// Example:
+//
+//	WithBetas(SdkBetaContext1M) // Enable extended context window
+func WithBetas(betas ...SdkBeta) Option {
+	return func(o *Options) {
+		o.Betas = betas
 	}
 }
 
@@ -264,6 +303,14 @@ func WithSettings(settings string) Option {
 func WithSandbox(sandbox *SandboxSettings) Option {
 	return func(o *Options) {
 		o.Sandbox = sandbox
+	}
+}
+
+// WithEnableFileCheckpointing enables file checkpointing to track file changes during the session.
+// When enabled, files can be rewound to their state at any user message using Client.RewindFiles().
+func WithEnableFileCheckpointing(enable bool) Option {
+	return func(o *Options) {
+		o.EnableFileCheckpointing = enable
 	}
 }
 

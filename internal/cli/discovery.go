@@ -165,6 +165,23 @@ func addOptionsToCommand(cmd []string, options *shared.Options) []string {
 }
 
 func addToolControlFlags(cmd []string, options *shared.Options) []string {
+	// Handle tools option (base set of tools)
+	if options.Tools != nil {
+		switch tools := options.Tools.(type) {
+		case []string:
+			if len(tools) == 0 {
+				cmd = append(cmd, "--tools", "")
+			} else {
+				cmd = append(cmd, "--tools", strings.Join(tools, ","))
+			}
+		case shared.ToolsPreset:
+			// Preset object - 'claude_code' preset maps to 'default'
+			cmd = append(cmd, "--tools", "default")
+		case *shared.ToolsPreset:
+			cmd = append(cmd, "--tools", "default")
+		}
+	}
+
 	if len(options.AllowedTools) > 0 {
 		cmd = append(cmd, "--allowed-tools", strings.Join(options.AllowedTools, ","))
 	}
@@ -194,7 +211,16 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 	if options.MaxThinkingTokens > 0 {
 		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", options.MaxThinkingTokens))
 	}
-	
+
+	// Handle betas option
+	if len(options.Betas) > 0 {
+		betaStrs := make([]string, len(options.Betas))
+		for i, beta := range options.Betas {
+			betaStrs[i] = string(beta)
+		}
+		cmd = append(cmd, "--betas", strings.Join(betaStrs, ","))
+	}
+
 	// Handle OutputFormat for structured outputs
 	if options.OutputFormat != nil {
 		if outputType, ok := options.OutputFormat["type"].(string); ok && outputType == "json_schema" {
@@ -206,7 +232,7 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 			}
 		}
 	}
-	
+
 	return cmd
 }
 

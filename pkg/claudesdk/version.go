@@ -1,7 +1,7 @@
 package claudesdk
 
 // Version represents the current version of the Claude Code SDK for Go.
-const Version = "0.1.10"
+const Version = "0.1.14"
 
 // BundledCLIVersion represents the version of the bundled Claude Code CLI.
-const BundledCLIVersion = "2.0.57"
+const BundledCLIVersion = "2.0.62"
