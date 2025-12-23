@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.1.18
+
+### Internal/Other Changes
+
+- Updated bundled Claude CLI to version 2.0.74
+
+## 0.1.17
+
+### New Features
+
+- **UserMessage UUID field**: Added `UUID` field to `UserMessage` response type, making it easier to use the `RewindFiles()` method by providing direct access to message identifiers needed for file checkpointing
+
+### Internal/Other Changes
+
+- Updated bundled Claude CLI to version 2.0.70
+
+## 0.1.16
+
+### Bug Fixes
+
+- **Rate limit detection**: Fixed parsing of the `Error` field in `AssistantMessage`, enabling applications to detect and handle API errors like rate limits. Previously, the `Error` field was defined but never populated from CLI responses
+
+### Internal/Other Changes
+
+- Updated bundled Claude CLI to version 2.0.68
+
+## 0.1.15
+
+### New Features
+
+- **File checkpointing and rewind**: Added `EnableFileCheckpointing` option to `Options` and `RewindFiles(ctx, userMessageID)` method to `Client`. This enables reverting file changes made during a session back to a specific checkpoint, useful for exploring different approaches or recovering from unwanted modifications
+
 ## 0.1.14
 
 ### New Features

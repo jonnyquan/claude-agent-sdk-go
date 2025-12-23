@@ -213,6 +213,12 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 	}
 	debugLog("[SDK-Parser] 👤 UserMessage content type: %T", content)
 
+	// Parse uuid field (for file checkpointing support)
+	var uuid *string
+	if uuidVal, ok := data["uuid"].(string); ok {
+		uuid = &uuidVal
+	}
+
 	// Handle both string content and array of content blocks
 	switch c := content.(type) {
 	case string:
@@ -220,6 +226,7 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 		debugLog("[SDK-Parser] 👤 UserMessage has string content: %q", c)
 		return &shared.UserMessage{
 			Content: c,
+			UUID:    uuid,
 		}, nil
 	case []any:
 		// Array of content blocks
@@ -235,6 +242,7 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 		}
 		return &shared.UserMessage{
 			Content: blocks,
+			UUID:    uuid,
 		}, nil
 	default:
 		return nil, shared.NewMessageParseError("invalid user message content type", data)
@@ -272,10 +280,18 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 		debugLog("[SDK-Parser] 🤖   Block #%d: type=%T", i, block)
 	}
 
+	// Parse error field from message data (for rate limit detection, etc.)
+	var errorField *shared.AssistantMessageError
+	if errVal, ok := messageData["error"].(string); ok {
+		errType := shared.AssistantMessageError(errVal)
+		errorField = &errType
+	}
+
 	debugLog("[SDK-Parser] 🤖 AssistantMessage parsed successfully")
 	return &shared.AssistantMessage{
 		Content: blocks,
 		Model:   model,
+		Error:   errorField,
 	}, nil
 }
 

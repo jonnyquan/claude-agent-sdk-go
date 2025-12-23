@@ -47,6 +47,7 @@ type ContentBlock interface {
 type UserMessage struct {
 	MessageType     string      `json:"type"`
 	Content         interface{} `json:"content"` // string or []ContentBlock
+	UUID            *string     `json:"uuid,omitempty"`
 	ParentToolUseID *string     `json:"parent_tool_use_id,omitempty"`
 }
 
@@ -74,6 +75,7 @@ func (m *UserMessage) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Type            string          `json:"type"`
 		Content         json.RawMessage `json:"content"`
+		UUID            *string         `json:"uuid,omitempty"`
 		ParentToolUseID *string         `json:"parent_tool_use_id,omitempty"`
 	}
 	
@@ -82,6 +84,7 @@ func (m *UserMessage) UnmarshalJSON(data []byte) error {
 	}
 	
 	m.MessageType = MessageTypeUser
+	m.UUID = raw.UUID
 	m.ParentToolUseID = raw.ParentToolUseID
 	
 	// Try to unmarshal content as string first
