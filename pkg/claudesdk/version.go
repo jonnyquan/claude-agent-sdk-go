@@ -4,4 +4,4 @@ package claudesdk
 const Version = "0.1.19"
 
 // BundledCLIVersion represents the version of the bundled Claude Code CLI.
-const BundledCLIVersion = "2.1.1"
+const BundledCLIVersion = "2.1.4"

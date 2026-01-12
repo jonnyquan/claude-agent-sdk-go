@@ -231,14 +231,16 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 	case []any:
 		// Array of content blocks
 		debugLog("[SDK-Parser] 👤 UserMessage has %d content block(s)", len(c))
-		blocks := make([]shared.ContentBlock, len(c))
+		var blocks []shared.ContentBlock
 		for i, blockData := range c {
 			block, err := p.parseContentBlock(blockData)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse content block %d: %w", i, err)
 			}
-			blocks[i] = block
-			debugLog("[SDK-Parser] 👤   Block #%d: type=%T", i, block)
+			if block != nil {
+				blocks = append(blocks, block)
+				debugLog("[SDK-Parser] 👤   Block #%d: type=%T", i, block)
+			}
 		}
 		return &shared.UserMessage{
 			Content: blocks,
@@ -270,14 +272,16 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 	}
 	debugLog("[SDK-Parser] 🤖 AssistantMessage model: %s", model)
 
-	blocks := make([]shared.ContentBlock, len(contentArray))
+	var blocks []shared.ContentBlock
 	for i, blockData := range contentArray {
 		block, err := p.parseContentBlock(blockData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse content block %d: %w", i, err)
 		}
-		blocks[i] = block
-		debugLog("[SDK-Parser] 🤖   Block #%d: type=%T", i, block)
+		if block != nil {
+			blocks = append(blocks, block)
+			debugLog("[SDK-Parser] 🤖   Block #%d: type=%T", i, block)
+		}
 	}
 
 	// Parse error field from message data (for rate limit detection, etc.)
@@ -393,10 +397,9 @@ func (p *Parser) parseContentBlock(blockData any) (shared.ContentBlock, error) {
 	case shared.ContentBlockTypeToolResult:
 		return p.parseToolResultBlock(data)
 	default:
-		return nil, shared.NewMessageParseError(
-			fmt.Sprintf("unknown content block type: %s", blockType),
-			data,
-		)
+		// Skip unknown content block types (e.g., server_tool_use) to match Python SDK behavior
+		debugLog("[SDK-Parser] ⚠️ Skipping unknown content block type: %s", blockType)
+		return nil, nil
 	}
 }
 

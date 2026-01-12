@@ -467,7 +467,7 @@ func TestParseErrorConditions(t *testing.T) {
 				"type": "assistant",
 				"message": map[string]any{
 					"content": []any{
-						map[string]any{"type": "unknown_block"},
+						map[string]any{"type": "text"}, // missing required "text" field
 					},
 					"model": "claude-3",
 				},
@@ -664,11 +664,6 @@ func TestContentBlockErrorConditions(t *testing.T) {
 			expectError: "content block missing type field",
 		},
 		{
-			name:        "unknown_block_type",
-			blockData:   map[string]any{"type": "unknown_type"},
-			expectError: "unknown content block type: unknown_type",
-		},
-		{
 			name:        "text_block_missing_text",
 			blockData:   map[string]any{"type": "text"},
 			expectError: "text block missing text field",
@@ -776,14 +771,14 @@ func TestContentBlockOptionalFields(t *testing.T) {
 func TestProcessLineEdgeCases(t *testing.T) {
 	parser := setupParserTest(t)
 
-	// Test line with content block parse error
-	invalidBlockLine := `{"type": "user", "message": {"content": [{"type": "unknown_block"}]}}`
-	messages, err := parser.ProcessLine(invalidBlockLine)
-	if err == nil {
-		t.Error("Expected error for invalid content block")
+	// Test line with unknown content block type - should be skipped (not error)
+	unknownBlockLine := `{"type": "user", "message": {"content": [{"type": "unknown_block"}]}}`
+	messages, err := parser.ProcessLine(unknownBlockLine)
+	if err != nil {
+		t.Errorf("Expected no error for unknown content block type, got %v", err)
 	}
-	if len(messages) != 0 {
-		t.Errorf("Expected no messages on error, got %d", len(messages))
+	if len(messages) != 1 {
+		t.Errorf("Expected 1 message with skipped block, got %d", len(messages))
 	}
 
 	// Test multiple lines with one having an error
