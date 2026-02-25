@@ -14,25 +14,28 @@ import (
 type ControlProtocol struct {
 	// Hook processor
 	hookProcessor *HookProcessor
-	
+
+	// SDK MCP servers for handling mcp_message requests
+	sdkMCPServers map[string]shared.McpSDKServer
+
 	// Pending control responses
 	pendingResponses map[string]*pendingControlResponse
 	responseMu       sync.RWMutex
-	
+
 	// Request counter
 	requestCounter int64
 	counterMu      sync.Mutex
-	
+
 	// Context
 	ctx    context.Context
 	cancel context.CancelFunc
-	
+
 	// Write function for sending messages
 	writeFn func([]byte) error
-	
+
 	// Initialized flag
-	initialized    bool
-	initializedMu  sync.RWMutex
+	initialized   bool
+	initializedMu sync.RWMutex
 }
 
 type pendingControlResponse struct {
@@ -46,11 +49,13 @@ func NewControlProtocol(
 	ctx context.Context,
 	hookProcessor *HookProcessor,
 	writeFn func([]byte) error,
+	sdkMCPServers map[string]shared.McpSDKServer,
 ) *ControlProtocol {
 	cpCtx, cancel := context.WithCancel(ctx)
-	
+
 	return &ControlProtocol{
 		hookProcessor:    hookProcessor,
+		sdkMCPServers:   sdkMCPServers,
 		pendingResponses: make(map[string]*pendingControlResponse),
 		ctx:              cpCtx,
 		cancel:           cancel,
@@ -59,10 +64,19 @@ func NewControlProtocol(
 }
 
 // Initialize sends initialization request to CLI.
-func (cp *ControlProtocol) Initialize() (map[string]any, error) {
+func (cp *ControlProtocol) Initialize(agents map[string]map[string]any) (map[string]any, error) {
 	// Build hooks configuration
-	hooksConfig := cp.hookProcessor.BuildInitializeConfig()
-	
+	var hooksConfig map[string]any
+	if cp.hookProcessor != nil {
+		rawConfig := cp.hookProcessor.BuildInitializeConfig()
+		if len(rawConfig) > 0 {
+			hooksConfig = make(map[string]any, len(rawConfig))
+			for k, v := range rawConfig {
+				hooksConfig[k] = v
+			}
+		}
+	}
+
 	// Build request
 	request := map[string]any{
 		"subtype": shared.ControlSubtypeInitialize,
@@ -70,18 +84,62 @@ func (cp *ControlProtocol) Initialize() (map[string]any, error) {
 	if hooksConfig != nil && len(hooksConfig) > 0 {
 		request["hooks"] = hooksConfig
 	}
-	
+	if agents != nil && len(agents) > 0 {
+		request["agents"] = agents
+	}
+
 	// Send and wait for response
 	response, err := cp.sendControlRequest(request, 60*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("initialize request failed: %w", err)
 	}
-	
+
 	cp.initializedMu.Lock()
 	cp.initialized = true
 	cp.initializedMu.Unlock()
-	
+
 	return response, nil
+}
+
+// GetMCPStatus queries the MCP status from CLI.
+func (cp *ControlProtocol) GetMCPStatus() (map[string]any, error) {
+	request := map[string]any{
+		"subtype": shared.ControlSubtypeMCPStatus,
+	}
+	return cp.sendControlRequest(request, 60*time.Second)
+}
+
+// SetPermissionMode changes the permission mode during conversation.
+func (cp *ControlProtocol) SetPermissionMode(mode string) error {
+	request := map[string]any{
+		"subtype": shared.ControlSubtypeSetPermissionMode,
+		"mode":    mode,
+	}
+	_, err := cp.sendControlRequest(request, 60*time.Second)
+	return err
+}
+
+// SetModel changes the AI model during conversation.
+func (cp *ControlProtocol) SetModel(model *string) error {
+	request := map[string]any{
+		"subtype": shared.ControlSubtypeSetModel,
+	}
+	if model != nil {
+		request["model"] = *model
+	} else {
+		request["model"] = nil
+	}
+	_, err := cp.sendControlRequest(request, 60*time.Second)
+	return err
+}
+
+// InterruptControl sends an interrupt control request to CLI.
+func (cp *ControlProtocol) InterruptControl() error {
+	request := map[string]any{
+		"subtype": shared.ControlSubtypeInterrupt,
+	}
+	_, err := cp.sendControlRequest(request, 60*time.Second)
+	return err
 }
 
 // IsInitialized returns whether the control protocol is initialized.
@@ -167,8 +225,7 @@ func (cp *ControlProtocol) processControlRequest(request *shared.ControlRequest)
 		responseData, err = cp.handleHookCallback(request.Request.Data)
 		
 	case shared.ControlSubtypeMCPMessage:
-		// TODO: Implement MCP message handling
-		err = fmt.Errorf("MCP messages not yet implemented")
+		responseData, err = cp.handleMCPMessage(request.Request.Data)
 		
 	default:
 		err = fmt.Errorf("unsupported control request subtype: %s", request.Request.Subtype)
@@ -288,6 +345,67 @@ func (cp *ControlProtocol) handleHookCallback(data map[string]any) (map[string]a
 	
 	// Hook output is already a map[string]any
 	return output, nil
+}
+
+// handleMCPMessage handles an MCP message request from CLI.
+func (cp *ControlProtocol) handleMCPMessage(data map[string]any) (map[string]any, error) {
+	serverName, ok := data["server_name"].(string)
+	if !ok || serverName == "" {
+		return nil, fmt.Errorf("missing server_name for MCP request")
+	}
+
+	mcpMessage, ok := data["message"].(map[string]any)
+	if !ok || mcpMessage == nil {
+		return nil, fmt.Errorf("missing message for MCP request")
+	}
+
+	// Find the SDK MCP server
+	server, exists := cp.sdkMCPServers[serverName]
+	if !exists {
+		// Return JSONRPC error response
+		return map[string]any{
+			"mcp_response": map[string]any{
+				"jsonrpc": "2.0",
+				"id":      mcpMessage["id"],
+				"error": map[string]any{
+					"code":    -32601,
+					"message": fmt.Sprintf("Server '%s' not found", serverName),
+				},
+			},
+		}, nil
+	}
+
+	// Marshal the JSONRPC message for the server
+	reqBytes, err := json.Marshal(mcpMessage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal MCP message: %w", err)
+	}
+
+	// Route to the SDK MCP server
+	respBytes, err := server.HandleJSONRPC(cp.ctx, reqBytes)
+	if err != nil {
+		// Return JSONRPC error response
+		return map[string]any{
+			"mcp_response": map[string]any{
+				"jsonrpc": "2.0",
+				"id":      mcpMessage["id"],
+				"error": map[string]any{
+					"code":    -32603,
+					"message": err.Error(),
+				},
+			},
+		}, nil
+	}
+
+	// Parse the response
+	var mcpResponse map[string]any
+	if err := json.Unmarshal(respBytes, &mcpResponse); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal MCP response: %w", err)
+	}
+
+	return map[string]any{
+		"mcp_response": mcpResponse,
+	}, nil
 }
 
 // handleControlCancel handles control cancellation request.

@@ -44,7 +44,12 @@ func NewHookProcessor(ctx context.Context, options *shared.Options) *HookProcess
 	if options != nil && len(options.Hooks) > 0 {
 		hp.loadHooksFromOptions(options)
 	}
-	
+
+	// Wire CanUseTool callback from options
+	if options != nil && options.CanUseTool != nil {
+		hp.canUseTool = options.CanUseTool
+	}
+
 	return hp
 }
 
@@ -107,8 +112,12 @@ func (hp *HookProcessor) BuildInitializeConfig() map[string][]shared.HookMatcher
 			}
 			
 			if len(callbackIDs) > 0 {
+				matcherStr := ""
+				if matcher.Matcher != nil {
+					matcherStr = *matcher.Matcher
+				}
 				config := shared.HookMatcherConfig{
-					Matcher:         matcher.Matcher,
+					Matcher:         matcherStr,
 					HookCallbackIDs: callbackIDs,
 				}
 				if matcher.Timeout != nil {

@@ -13,7 +13,7 @@ func TestOptionsDefaults(t *testing.T) {
 		field    interface{}
 		expected interface{}
 	}{
-		{"MaxThinkingTokens", options.MaxThinkingTokens, 8000},
+		{"MaxThinkingTokens", options.MaxThinkingTokens == nil, true},
 		{"ContinueConversation", options.ContinueConversation, false},
 		{"MaxTurns", options.MaxTurns, 0},
 		{"AllowedTools_initialized", options.AllowedTools == nil, false},
@@ -81,7 +81,8 @@ func TestOptionsValidation(t *testing.T) {
 			name: "negative_thinking_tokens",
 			setup: func() *Options {
 				opts := NewOptions()
-				opts.MaxThinkingTokens = -100
+				v := -100
+			opts.MaxThinkingTokens = &v
 				return opts
 			},
 			wantErr: true,

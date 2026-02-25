@@ -21,6 +21,22 @@ const (
 	PermissionModeBypassPermissions PermissionMode = "bypassPermissions"
 )
 
+// SettingSource represents a configuration source.
+type SettingSource string
+
+const (
+	SettingSourceUser    SettingSource = "user"
+	SettingSourceProject SettingSource = "project"
+	SettingSourceLocal   SettingSource = "local"
+)
+
+// SystemPromptPreset represents a preset system prompt configuration.
+type SystemPromptPreset struct {
+	Type   string  `json:"type"`   // Always "preset"
+	Preset string  `json:"preset"` // e.g., "claude_code"
+	Append *string `json:"append,omitempty"`
+}
+
 // SdkBeta represents SDK beta feature identifiers.
 // See https://docs.anthropic.com/en/api/beta-headers
 type SdkBeta string
@@ -28,6 +44,35 @@ type SdkBeta string
 const (
 	// SdkBetaContext1M enables extended context window (1M tokens).
 	SdkBetaContext1M SdkBeta = "context-1m-2025-08-07"
+)
+
+// ThinkingType represents the type of thinking configuration.
+type ThinkingType string
+
+const (
+	// ThinkingTypeAdaptive enables adaptive thinking with default budget.
+	ThinkingTypeAdaptive ThinkingType = "adaptive"
+	// ThinkingTypeEnabled enables thinking with a specified budget.
+	ThinkingTypeEnabled ThinkingType = "enabled"
+	// ThinkingTypeDisabled disables thinking.
+	ThinkingTypeDisabled ThinkingType = "disabled"
+)
+
+// ThinkingConfig controls extended thinking behavior.
+// Takes precedence over MaxThinkingTokens when set.
+type ThinkingConfig struct {
+	Type         ThinkingType `json:"type"`
+	BudgetTokens int          `json:"budget_tokens,omitempty"` // Only used for ThinkingTypeEnabled
+}
+
+// EffortLevel controls the effort/depth of thinking.
+type EffortLevel string
+
+const (
+	EffortLow    EffortLevel = "low"
+	EffortMedium EffortLevel = "medium"
+	EffortHigh   EffortLevel = "high"
+	EffortMax    EffortLevel = "max"
 )
 
 // ToolsPreset represents a preset configuration for available tools.
@@ -50,12 +95,14 @@ type Options struct {
 	DisallowedTools []string    `json:"disallowed_tools,omitempty"`
 
 	// System Prompts & Model
-	SystemPrompt       *string   `json:"system_prompt,omitempty"`
+	SystemPrompt       interface{} `json:"system_prompt,omitempty"` // string, *string, or SystemPromptPreset
 	AppendSystemPrompt *string   `json:"append_system_prompt,omitempty"`
 	Model              *string   `json:"model,omitempty"`
 	FallbackModel      *string   `json:"fallback_model,omitempty"`
-	MaxThinkingTokens  int       `json:"max_thinking_tokens,omitempty"`
-	Betas              []SdkBeta `json:"betas,omitempty"` // Beta features to enable
+	MaxThinkingTokens  *int             `json:"max_thinking_tokens,omitempty"`
+	Thinking           *ThinkingConfig  `json:"thinking,omitempty"`  // Takes precedence over MaxThinkingTokens
+	Effort             *EffortLevel     `json:"effort,omitempty"`    // Effort level for thinking depth
+	Betas              []SdkBeta        `json:"betas,omitempty"`     // Beta features to enable
 
 	// Permission & Safety System
 	PermissionMode           *PermissionMode `json:"permission_mode,omitempty"`
@@ -84,6 +131,12 @@ type Options struct {
 	// Key: HookEvent type (e.g., "PreToolUse", "PostToolUse")
 	// Value: List of hook matchers with their callbacks
 	Hooks map[string][]any `json:"hooks,omitempty"`
+
+	// Stderr callback for CLI debug output
+	Stderr func(string) `json:"-"` // Called with each stderr line from CLI
+
+	// Tool permission callback
+	CanUseTool CanUseToolCallback `json:"-"` // Called when CLI requests permission to use a tool
 
 	// Extensibility
 	ExtraArgs map[string]*string `json:"extra_args,omitempty"`
@@ -267,8 +320,8 @@ func (c *McpSdkServerConfig) GetType() McpServerType {
 // Validate checks the options for valid values and constraints.
 func (o *Options) Validate() error {
 	// Validate MaxThinkingTokens
-	if o.MaxThinkingTokens < 0 {
-		return fmt.Errorf("MaxThinkingTokens must be non-negative, got %d", o.MaxThinkingTokens)
+	if o.MaxThinkingTokens != nil && *o.MaxThinkingTokens < 0 {
+		return fmt.Errorf("MaxThinkingTokens must be non-negative, got %d", *o.MaxThinkingTokens)
 	}
 
 	// Validate MaxTurns
@@ -310,7 +363,6 @@ func NewOptions() *Options {
 	return &Options{
 		AllowedTools:      []string{},
 		DisallowedTools:   []string{},
-		MaxThinkingTokens: DefaultMaxThinkingTokens,
 		AddDirs:           []string{},
 		McpServers:        make(map[string]McpServerConfig),
 		Agents:            make(map[string]AgentDefinition),

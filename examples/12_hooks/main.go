@@ -10,6 +10,8 @@ import (
 	claudecode "github.com/jonnyquan/claude-agent-sdk-go"
 )
 
+func strPtr(s string) *string { return &s }
+
 // Example 1: PreToolUse hook to block certain bash commands
 func checkBashCommand(input claudecode.HookInput, toolUseID *string, ctx claudecode.HookContext) (claudecode.HookJSONOutput, error) {
 	toolName, _ := input["tool_name"].(string)
@@ -98,7 +100,7 @@ func examplePreToolUse() {
 	options := []claudecode.Option{
 		claudecode.WithAllowedTools("Bash"),
 		claudecode.WithHook(claudecode.HookEventPreToolUse, claudecode.HookMatcher{
-			Matcher: "Bash",
+			Matcher: strPtr("Bash"),
 			Hooks:   []claudecode.HookCallback{checkBashCommand},
 		}),
 	}
@@ -141,7 +143,7 @@ func examplePostToolUse() {
 	options := []claudecode.Option{
 		claudecode.WithAllowedTools("Bash"),
 		claudecode.WithHook(claudecode.HookEventPostToolUse, claudecode.HookMatcher{
-			Matcher: "Bash",
+			Matcher: strPtr("Bash"),
 			Hooks:   []claudecode.HookCallback{reviewToolOutput},
 		}),
 	}
@@ -183,7 +185,7 @@ func exampleContinueControl() {
 	options := []claudecode.Option{
 		claudecode.WithAllowedTools("Bash"),
 		claudecode.WithHook(claudecode.HookEventPostToolUse, claudecode.HookMatcher{
-			Matcher: "Bash",
+			Matcher: strPtr("Bash"),
 			Hooks:   []claudecode.HookCallback{stopOnCriticalError},
 		}),
 	}
@@ -225,15 +227,15 @@ func exampleMultipleHooks() {
 	options := []claudecode.Option{
 		claudecode.WithAllowedTools("Bash", "Write"),
 		claudecode.WithHook(claudecode.HookEventPreToolUse, claudecode.HookMatcher{
-			Matcher: "Bash",
+			Matcher: strPtr("Bash"),
 			Hooks:   []claudecode.HookCallback{checkBashCommand},
 		}),
 		claudecode.WithHook(claudecode.HookEventPostToolUse, claudecode.HookMatcher{
-			Matcher: "Bash",
+			Matcher: strPtr("Bash"),
 			Hooks:   []claudecode.HookCallback{reviewToolOutput, stopOnCriticalError},
 		}),
 		claudecode.WithHook(claudecode.HookEventUserPromptSubmit, claudecode.HookMatcher{
-			Matcher: "*",
+			Matcher: strPtr("*"),
 			Hooks:   []claudecode.HookCallback{addCustomInstructions},
 		}),
 	}

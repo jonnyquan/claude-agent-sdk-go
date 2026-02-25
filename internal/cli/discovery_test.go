@@ -42,38 +42,28 @@ func TestCLIDiscovery(t *testing.T) {
 // TestCommandBuilding tests CLI command construction with various options
 func TestCommandBuilding(t *testing.T) {
 	tests := []struct {
-		name       string
-		cliPath    string
-		options    *shared.Options
-		closeStdin bool
-		validate   func(*testing.T, []string)
+		name     string
+		cliPath  string
+		options  *shared.Options
+		validate func(*testing.T, []string)
 	}{
 		{
-			name:       "basic_oneshot_command",
-			cliPath:    "/usr/local/bin/claude",
-			options:    &shared.Options{},
-			closeStdin: true,
-			validate:   validateOneshotCommand,
+			name:     "basic_streaming_command",
+			cliPath:  "/usr/local/bin/claude",
+			options:  &shared.Options{},
+			validate: validateStreamingCommand,
 		},
 		{
-			name:       "basic_streaming_command",
-			cliPath:    "/usr/local/bin/claude",
-			options:    &shared.Options{},
-			closeStdin: false,
-			validate:   validateStreamingCommand,
-		},
-		{
-			name:       "all_options_command",
-			cliPath:    "/usr/local/bin/claude",
-			options:    createFullOptionsSet(),
-			closeStdin: false,
-			validate:   validateFullOptionsCommand,
+			name:     "all_options_command",
+			cliPath:  "/usr/local/bin/claude",
+			options:  createFullOptionsSet(),
+			validate: validateFullOptionsCommand,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			cmd := BuildCommand(test.cliPath, test.options, test.closeStdin)
+			cmd := BuildCommand(test.cliPath, test.options)
 			test.validate(t, cmd)
 		})
 	}
@@ -115,54 +105,27 @@ func TestExtraArgsSupport(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			options := &shared.Options{ExtraArgs: test.extraArgs}
-			cmd := BuildCommand("/usr/local/bin/claude", options, true)
+			cmd := BuildCommand("/usr/local/bin/claude", options)
 			test.validate(t, cmd)
 		})
 	}
 }
 
 func TestBuildCommandAdvancedFlags(t *testing.T) {
-	model := "claude-3-5-sonnet"
 	opts := &shared.Options{
 		IncludePartialMessages: true,
 		ForkSession:            true,
 		SettingSources:         []string{"user", "project"},
-		Agents: map[string]shared.AgentDefinition{
-			"analyst": {
-				Description: "Analysis agent",
-				Prompt:      "Analyze data",
-				Tools:       []string{"Read"},
-				Model:       &model,
-			},
-		},
 	}
 
-	cmd := BuildCommand("/usr/local/bin/claude", opts, false)
+	cmd := BuildCommand("/usr/local/bin/claude", opts)
 
 	assertContainsArg(t, cmd, "--include-partial-messages")
 	assertContainsArg(t, cmd, "--fork-session")
 	assertContainsArgs(t, cmd, "--setting-sources", "user,project")
 
-	agentsJSON, ok := getFlagValue(cmd, "--agents")
-	if !ok {
-		t.Fatal("Expected --agents flag in command")
-	}
-
-	var payload map[string]map[string]interface{}
-	if err := json.Unmarshal([]byte(agentsJSON), &payload); err != nil {
-		t.Fatalf("Failed to unmarshal agents payload: %v", err)
-	}
-
-	agent, exists := payload["analyst"]
-	if !exists {
-		t.Fatalf("Expected analyst agent in payload: %v", payload)
-	}
-	if agent["description"] != "Analysis agent" {
-		t.Errorf("Unexpected agent description: %v", agent["description"])
-	}
-	if agent["prompt"] != "Analyze data" {
-		t.Errorf("Unexpected agent prompt: %v", agent["prompt"])
-	}
+	// Agents are no longer passed via CLI flag; they are sent via initialize request
+	assertNotContainsArg(t, cmd, "--agents")
 }
 
 func TestBuildCommandWithMcpServers(t *testing.T) {
@@ -176,7 +139,7 @@ func TestBuildCommandWithMcpServers(t *testing.T) {
 		},
 	}
 
-	cmd := BuildCommand("/usr/local/bin/claude", opts, false)
+	cmd := BuildCommand("/usr/local/bin/claude", opts)
 
 	mcpJSON, ok := getFlagValue(cmd, "--mcp-config")
 	if !ok {
@@ -206,23 +169,27 @@ func TestBuildCommandWithMcpServers(t *testing.T) {
 	}
 }
 
-// TestBuildCommandWithPrompt tests CLI command construction with prompt argument
+// TestBuildCommandWithPrompt tests CLI command construction for one-shot queries
+// In always-streaming mode, BuildCommandWithPrompt produces the same streaming args
 func TestBuildCommandWithPrompt(t *testing.T) {
 	tests := []struct {
 		name     string
 		options  *shared.Options
-		prompt   string
-		validate func(*testing.T, []string, string)
+		validate func(*testing.T, []string)
 	}{
-		{"basic_prompt", &shared.Options{}, "What is 2+2?", validateBasicPromptCommand},
-		{"empty_prompt", nil, "", validateEmptyPromptCommand},
-		{"multiline_prompt", &shared.Options{Model: stringPtr("claude-3-sonnet")}, "Line 1\nLine 2", validateBasicPromptCommand},
+		{"basic_prompt", &shared.Options{}, validateStreamingCommand},
+		{"nil_options", nil, validateStreamingCommand},
+		{"with_model", &shared.Options{Model: stringPtr("claude-3-sonnet")}, func(t *testing.T, cmd []string) {
+			t.Helper()
+			validateStreamingCommand(t, cmd)
+			assertContainsArgs(t, cmd, "--model", "claude-3-sonnet")
+		}},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			cmd := BuildCommandWithPrompt("/usr/local/bin/claude", test.options, test.prompt)
-			test.validate(t, cmd, test.prompt)
+			cmd := BuildCommandWithPrompt("/usr/local/bin/claude", test.options)
+			test.validate(t, cmd)
 		})
 	}
 }
@@ -325,7 +292,7 @@ func createFullOptionsSet() *shared.Options {
 		SystemPrompt:         &systemPrompt,
 		AppendSystemPrompt:   &appendPrompt,
 		Model:                &model,
-		MaxThinkingTokens:    10000,
+		MaxThinkingTokens:    intPtr(10000),
 		PermissionMode:       &permissionMode,
 		ContinueConversation: true,
 		Resume:               &resume,
@@ -418,14 +385,6 @@ func assertVersionDetectionError(t *testing.T, err error) {
 
 // Command validation helpers
 
-func validateOneshotCommand(t *testing.T, cmd []string) {
-	t.Helper()
-	assertContainsArgs(t, cmd, "--output-format", "stream-json")
-	assertContainsArg(t, cmd, "--verbose")
-	assertContainsArg(t, cmd, "--print")
-	assertNotContainsArgs(t, cmd, "--input-format", "stream-json")
-}
-
 func validateStreamingCommand(t *testing.T, cmd []string) {
 	t.Helper()
 	assertContainsArgs(t, cmd, "--output-format", "stream-json")
@@ -436,8 +395,8 @@ func validateStreamingCommand(t *testing.T, cmd []string) {
 
 func validateFullOptionsCommand(t *testing.T, cmd []string) {
 	t.Helper()
-	assertContainsArgs(t, cmd, "--allowed-tools", "Read,Write")
-	assertContainsArgs(t, cmd, "--disallowed-tools", "Bash,Delete")
+	assertContainsArgs(t, cmd, "--allowedTools", "Read,Write")
+	assertContainsArgs(t, cmd, "--disallowedTools", "Bash,Delete")
 	assertContainsArgs(t, cmd, "--system-prompt", "You are a helpful assistant")
 	assertContainsArgs(t, cmd, "--model", "claude-3-sonnet")
 	assertContainsArg(t, cmd, "--continue")
@@ -509,22 +468,6 @@ func assertNotContainsArgs(t *testing.T, args []string, flag, value string) {
 			return
 		}
 	}
-}
-
-// Validation functions for BuildCommandWithPrompt tests
-
-func validateBasicPromptCommand(t *testing.T, cmd []string, prompt string) {
-	t.Helper()
-	assertContainsArgs(t, cmd, "--output-format", "stream-json")
-	assertContainsArg(t, cmd, "--verbose")
-	assertContainsArgs(t, cmd, "--print", prompt)
-}
-
-func validateEmptyPromptCommand(t *testing.T, cmd []string, _ string) {
-	t.Helper()
-	assertContainsArgs(t, cmd, "--output-format", "stream-json")
-	assertContainsArg(t, cmd, "--verbose")
-	assertContainsArgs(t, cmd, "--print", "") // Empty prompt should still be there
 }
 
 // Helper function for string pointers
@@ -831,7 +774,7 @@ func TestAddPermissionFlagsComplete(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			cmd := BuildCommand("/usr/local/bin/claude", test.options, false)
+			cmd := BuildCommand("/usr/local/bin/claude", test.options)
 
 			for flag, expectedValue := range test.expect {
 				assertContainsArgs(t, cmd, flag, expectedValue)
@@ -876,6 +819,10 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+func intPtr(i int) *int {
+	return &i
+}
+
 // TestFallbackModelSupport tests fallback_model option
 func TestFallbackModelSupport(t *testing.T) {
 	tests := []struct {
@@ -916,7 +863,7 @@ func TestFallbackModelSupport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := BuildCommand("/usr/local/bin/claude", tt.options, false)
+			cmd := BuildCommand("/usr/local/bin/claude", tt.options)
 
 			for flag, expectedValue := range tt.expectContains {
 				assertContainsArgs(t, cmd, flag, expectedValue)
@@ -964,7 +911,7 @@ func TestSystemPromptDefaultBehavior(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := BuildCommand("/usr/local/bin/claude", tt.options, false)
+			cmd := BuildCommand("/usr/local/bin/claude", tt.options)
 
 			// Find --system-prompt flag
 			found := false

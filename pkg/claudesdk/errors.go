@@ -39,3 +39,10 @@ var NewJSONDecodeError = shared.NewJSONDecodeError
 
 // NewMessageParseError creates a new message parse error.
 var NewMessageParseError = shared.NewMessageParseError
+
+// Python SDK compatibility aliases
+// CLIConnectionError is an alias for ConnectionError, matching the Python SDK name.
+type CLIConnectionError = shared.ConnectionError
+
+// CLIJSONDecodeError is an alias for JSONDecodeError, matching the Python SDK name.
+type CLIJSONDecodeError = shared.JSONDecodeError

@@ -9,12 +9,16 @@ import (
 type HookEvent = shared.HookEvent
 
 const (
-	HookEventPreToolUse       = shared.HookEventPreToolUse
-	HookEventPostToolUse      = shared.HookEventPostToolUse
-	HookEventUserPromptSubmit = shared.HookEventUserPromptSubmit
-	HookEventStop             = shared.HookEventStop
-	HookEventSubagentStop     = shared.HookEventSubagentStop
-	HookEventPreCompact       = shared.HookEventPreCompact
+	HookEventPreToolUse         = shared.HookEventPreToolUse
+	HookEventPostToolUse        = shared.HookEventPostToolUse
+	HookEventPostToolUseFailure = shared.HookEventPostToolUseFailure
+	HookEventUserPromptSubmit   = shared.HookEventUserPromptSubmit
+	HookEventStop               = shared.HookEventStop
+	HookEventSubagentStop       = shared.HookEventSubagentStop
+	HookEventPreCompact         = shared.HookEventPreCompact
+	HookEventNotification       = shared.HookEventNotification
+	HookEventSubagentStart      = shared.HookEventSubagentStart
+	HookEventPermissionRequest  = shared.HookEventPermissionRequest
 )
 
 // Hook input types
@@ -25,6 +29,10 @@ type UserPromptSubmitHookInput = shared.UserPromptSubmitHookInput
 type StopHookInput = shared.StopHookInput
 type SubagentStopHookInput = shared.SubagentStopHookInput
 type PreCompactHookInput = shared.PreCompactHookInput
+type NotificationHookInput = shared.NotificationHookInput
+type SubagentStartHookInput = shared.SubagentStartHookInput
+type PermissionRequestHookInput = shared.PermissionRequestHookInput
+type PostToolUseFailureHookInput = shared.PostToolUseFailureHookInput
 type HookInput = shared.HookInput
 
 // Hook output types
@@ -32,6 +40,10 @@ type PreToolUseHookSpecificOutput = shared.PreToolUseHookSpecificOutput
 type PostToolUseHookSpecificOutput = shared.PostToolUseHookSpecificOutput
 type UserPromptSubmitHookSpecificOutput = shared.UserPromptSubmitHookSpecificOutput
 type SessionStartHookSpecificOutput = shared.SessionStartHookSpecificOutput
+type PostToolUseFailureHookSpecificOutput = shared.PostToolUseFailureHookSpecificOutput
+type NotificationHookSpecificOutput = shared.NotificationHookSpecificOutput
+type SubagentStartHookSpecificOutput = shared.SubagentStartHookSpecificOutput
+type PermissionRequestHookSpecificOutput = shared.PermissionRequestHookSpecificOutput
 type HookSpecificOutput = shared.HookSpecificOutput
 type AsyncHookJSONOutput = shared.AsyncHookJSONOutput
 type SyncHookJSONOutput = shared.SyncHookJSONOutput

@@ -8,12 +8,16 @@ import (
 type HookEvent string
 
 const (
-	HookEventPreToolUse       HookEvent = "PreToolUse"
-	HookEventPostToolUse      HookEvent = "PostToolUse"
-	HookEventUserPromptSubmit HookEvent = "UserPromptSubmit"
-	HookEventStop             HookEvent = "Stop"
-	HookEventSubagentStop     HookEvent = "SubagentStop"
-	HookEventPreCompact       HookEvent = "PreCompact"
+	HookEventPreToolUse        HookEvent = "PreToolUse"
+	HookEventPostToolUse       HookEvent = "PostToolUse"
+	HookEventPostToolUseFailure HookEvent = "PostToolUseFailure"
+	HookEventUserPromptSubmit  HookEvent = "UserPromptSubmit"
+	HookEventStop              HookEvent = "Stop"
+	HookEventSubagentStop      HookEvent = "SubagentStop"
+	HookEventPreCompact        HookEvent = "PreCompact"
+	HookEventNotification      HookEvent = "Notification"
+	HookEventSubagentStart     HookEvent = "SubagentStart"
+	HookEventPermissionRequest HookEvent = "PermissionRequest"
 )
 
 // BaseHookInput contains common fields present across many hook events.
@@ -30,6 +34,7 @@ type PreToolUseHookInput struct {
 	HookEventName string         `json:"hook_event_name"`
 	ToolName      string         `json:"tool_name"`
 	ToolInput     map[string]any `json:"tool_input"`
+	ToolUseID     string         `json:"tool_use_id"`
 }
 
 // PostToolUseHookInput represents input data for PostToolUse hook events.
@@ -39,6 +44,7 @@ type PostToolUseHookInput struct {
 	ToolName      string         `json:"tool_name"`
 	ToolInput     map[string]any `json:"tool_input"`
 	ToolResponse  any            `json:"tool_response"`
+	ToolUseID     string         `json:"tool_use_id"`
 }
 
 // UserPromptSubmitHookInput represents input data for UserPromptSubmit hook events.
@@ -58,8 +64,11 @@ type StopHookInput struct {
 // SubagentStopHookInput represents input data for SubagentStop hook events.
 type SubagentStopHookInput struct {
 	BaseHookInput
-	HookEventName  string `json:"hook_event_name"`
-	StopHookActive bool   `json:"stop_hook_active"`
+	HookEventName       string `json:"hook_event_name"`
+	StopHookActive      bool   `json:"stop_hook_active"`
+	AgentID             string `json:"agent_id"`
+	AgentTranscriptPath string `json:"agent_transcript_path"`
+	AgentType           string `json:"agent_type"`
 }
 
 // PreCompactHookInput represents input data for PreCompact hook events.
@@ -70,6 +79,43 @@ type PreCompactHookInput struct {
 	CustomInstructions *string `json:"custom_instructions,omitempty"`
 }
 
+// PostToolUseFailureHookInput represents input data for PostToolUseFailure hook events.
+type PostToolUseFailureHookInput struct {
+	BaseHookInput
+	HookEventName string         `json:"hook_event_name"`
+	ToolName      string         `json:"tool_name"`
+	ToolInput     map[string]any `json:"tool_input"`
+	ToolUseID     string         `json:"tool_use_id"`
+	Error         string         `json:"error"`
+	IsInterrupt   *bool          `json:"is_interrupt,omitempty"`
+}
+
+// NotificationHookInput represents input data for Notification hook events.
+type NotificationHookInput struct {
+	BaseHookInput
+	HookEventName    string `json:"hook_event_name"`
+	Message          string `json:"message"`
+	Title            *string `json:"title,omitempty"`
+	NotificationType string `json:"notification_type"`
+}
+
+// SubagentStartHookInput represents input data for SubagentStart hook events.
+type SubagentStartHookInput struct {
+	BaseHookInput
+	HookEventName string `json:"hook_event_name"`
+	AgentID       string `json:"agent_id"`
+	AgentType     string `json:"agent_type"`
+}
+
+// PermissionRequestHookInput represents input data for PermissionRequest hook events.
+type PermissionRequestHookInput struct {
+	BaseHookInput
+	HookEventName        string         `json:"hook_event_name"`
+	ToolName             string         `json:"tool_name"`
+	ToolInput            map[string]any `json:"tool_input"`
+	PermissionSuggestions []any         `json:"permission_suggestions,omitempty"`
+}
+
 // HookInput is a union type for all hook inputs.
 // Use type assertion to access specific fields based on hook_event_name.
 type HookInput = map[string]any
@@ -78,14 +124,16 @@ type HookInput = map[string]any
 type PreToolUseHookSpecificOutput struct {
 	HookEventName            string         `json:"hookEventName"`
 	PermissionDecision       string         `json:"permissionDecision,omitempty"`       // "allow", "deny", or "ask"
-	PermissionDecisionReason string         `json:"permissionDecisionReason,omitempty"` 
+	PermissionDecisionReason string         `json:"permissionDecisionReason,omitempty"`
 	UpdatedInput             map[string]any `json:"updatedInput,omitempty"`
+	AdditionalContext        string         `json:"additionalContext,omitempty"`
 }
 
 // PostToolUseHookSpecificOutput represents hook-specific output for PostToolUse events.
 type PostToolUseHookSpecificOutput struct {
-	HookEventName     string `json:"hookEventName"`
-	AdditionalContext string `json:"additionalContext,omitempty"`
+	HookEventName       string      `json:"hookEventName"`
+	AdditionalContext   string      `json:"additionalContext,omitempty"`
+	UpdatedMCPToolOutput interface{} `json:"updatedMCPToolOutput,omitempty"`
 }
 
 // UserPromptSubmitHookSpecificOutput represents hook-specific output for UserPromptSubmit events.
@@ -98,6 +146,30 @@ type UserPromptSubmitHookSpecificOutput struct {
 type SessionStartHookSpecificOutput struct {
 	HookEventName     string `json:"hookEventName"`
 	AdditionalContext string `json:"additionalContext,omitempty"`
+}
+
+// PostToolUseFailureHookSpecificOutput represents hook-specific output for PostToolUseFailure events.
+type PostToolUseFailureHookSpecificOutput struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext,omitempty"`
+}
+
+// NotificationHookSpecificOutput represents hook-specific output for Notification events.
+type NotificationHookSpecificOutput struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext,omitempty"`
+}
+
+// SubagentStartHookSpecificOutput represents hook-specific output for SubagentStart events.
+type SubagentStartHookSpecificOutput struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext,omitempty"`
+}
+
+// PermissionRequestHookSpecificOutput represents hook-specific output for PermissionRequest events.
+type PermissionRequestHookSpecificOutput struct {
+	HookEventName string         `json:"hookEventName"`
+	Decision      map[string]any `json:"decision"`
 }
 
 // HookSpecificOutput is a union type for hook-specific outputs.
@@ -148,8 +220,8 @@ type HookCallback func(input HookInput, toolUseID *string, ctx HookContext) (Hoo
 
 // HookMatcher configures hook callbacks for specific patterns.
 type HookMatcher struct {
-	Matcher string         `json:"matcher"`
-	Hooks   []HookCallback `json:"-"`        // Not serialized, handled by SDK
+	Matcher *string        `json:"matcher,omitempty"` // nil matches all tools
+	Hooks   []HookCallback `json:"-"`                 // Not serialized, handled by SDK
 	Timeout *float64       `json:"timeout,omitempty"` // Timeout in seconds for all hooks in this matcher
 }
 

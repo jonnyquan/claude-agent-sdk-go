@@ -1,5 +1,7 @@
 package shared
 
+import "encoding/json"
+
 // Control Protocol message types and structures for SDK-CLI communication
 
 // Control message types
@@ -15,7 +17,11 @@ const (
 	ControlSubtypeCanUseTool   = "can_use_tool"
 	ControlSubtypeHookCallback = "hook_callback"
 	ControlSubtypeMCPMessage   = "mcp_message"
-	ControlSubtypeRewindFiles  = "rewind_files"
+	ControlSubtypeMCPStatus        = "mcp_status"
+	ControlSubtypeRewindFiles      = "rewind_files"
+	ControlSubtypeSetPermissionMode = "set_permission_mode"
+	ControlSubtypeSetModel         = "set_model"
+	ControlSubtypeInterrupt        = "interrupt"
 )
 
 // Control response subtypes
@@ -84,8 +90,9 @@ type ResponsePayload struct {
 
 // InitializeRequest represents initialization request data.
 type InitializeRequest struct {
-	Subtype string             `json:"subtype"` // "initialize"
+	Subtype string                        `json:"subtype"` // "initialize"
 	Hooks   map[string][]HookMatcherConfig `json:"hooks,omitempty"`
+	Agents  map[string]map[string]any      `json:"agents,omitempty"`
 }
 
 // HookMatcherConfig represents hook configuration sent to CLI.
@@ -101,6 +108,7 @@ type CanUseToolRequest struct {
 	ToolName             string         `json:"tool_name"`
 	Input                map[string]any `json:"input"`
 	PermissionSuggestions []any         `json:"permission_suggestions,omitempty"`
+	BlockedPath          *string        `json:"blocked_path,omitempty"`
 }
 
 // HookCallbackRequest represents a hook callback request from CLI.
@@ -131,11 +139,9 @@ type RewindFilesRequest struct {
 
 // Helper functions for JSON marshaling/unmarshaling
 func marshalJSON(v any) ([]byte, error) {
-	// Use standard library for now, can be replaced with faster lib if needed
-	return []byte{}, nil // Implementation uses encoding/json
+	return json.Marshal(v)
 }
 
 func unmarshalJSON(data []byte, v any) error {
-	// Use standard library for now
-	return nil // Implementation uses encoding/json
+	return json.Unmarshal(data, v)
 }

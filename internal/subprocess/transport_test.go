@@ -108,7 +108,7 @@ func TestTransportProcessManagement(t *testing.T) {
 
 	// Test interrupt handling
 	t.Run("interrupt_handling", func(t *testing.T) {
-		if runtime.GOOS == windowsOS {
+		if runtime.GOOS == "windows" {
 			t.Skip("Interrupt not supported on Windows")
 		}
 
@@ -282,7 +282,7 @@ func TestTransportEnvironmentSetup(t *testing.T) {
 	assertTransportConnected(t, transport, true)
 
 	// Test interrupt (platform-specific signals)
-	if runtime.GOOS != windowsOS {
+	if runtime.GOOS != "windows" {
 		err := transport.Interrupt(ctx)
 		assertNoTransportError(t, err)
 	}
@@ -392,7 +392,7 @@ func newTransportMockCLIWithOptions(options ...TransportMockOption) string {
 	var script string
 	var extension string
 
-	if runtime.GOOS == windowsOS {
+	if runtime.GOOS == "windows" {
 		extension = ".bat"
 		switch {
 		case opts.shouldFail:
@@ -494,7 +494,7 @@ const testSDKVersion = "test-version"
 func setupTransportForTest(t *testing.T, cliPath string) *Transport {
 	t.Helper()
 	options := &shared.Options{}
-	return New(cliPath, options, false, "sdk-go", testSDKVersion)
+	return New(cliPath, options, "sdk-go", testSDKVersion)
 }
 
 func connectTransportSafely(ctx context.Context, t *testing.T, transport *Transport) {
@@ -551,9 +551,6 @@ func TestNewWithPrompt(t *testing.T) {
 			if transport.entrypoint != "sdk-go" {
 				t.Errorf("Expected entrypoint 'sdk-go', got %q", transport.entrypoint)
 			}
-			if !transport.closeStdin {
-				t.Error("Expected closeStdin to be true")
-			}
 			if transport.promptArg == nil || *transport.promptArg != test.prompt {
 				t.Errorf("Expected promptArg %q, got %v", test.prompt, transport.promptArg)
 			}
@@ -585,7 +582,7 @@ func TestTransportConnectErrorPaths(t *testing.T) {
 			name: "invalid_working_directory",
 			setup: func() *Transport {
 				options := &shared.Options{Cwd: stringPtr("/nonexistent/directory/path")}
-				return New(newTransportMockCLI(), options, false, "sdk-go", testSDKVersion)
+				return New(newTransportMockCLI(), options, "sdk-go", testSDKVersion)
 			},
 			wantError: true,
 		},
@@ -666,7 +663,7 @@ func TestTransportSendMessageEdgeCases(t *testing.T) {
 
 // TestTransportTerminateProcessPaths tests uncovered terminateProcess scenarios
 func TestTransportTerminateProcessPaths(t *testing.T) {
-	if runtime.GOOS == windowsOS {
+	if runtime.GOOS == "windows" {
 		t.Skip("Process termination testing requires Unix signals")
 	}
 
@@ -819,7 +816,7 @@ func TestTransportInterruptErrorPaths(t *testing.T) {
 		}
 	})
 
-	if runtime.GOOS != windowsOS {
+	if runtime.GOOS != "windows" {
 		t.Run("interrupt_signal_error", func(t *testing.T) {
 			transport := setupTransportForTest(t, newTransportMockCLI())
 			defer disconnectTransportSafely(t, transport)
@@ -947,7 +944,7 @@ func TestSubprocessEnvironmentVariables(t *testing.T) {
 			defer cancel()
 
 			// Create transport with test options
-			transport := New("echo", tt.options, true, "sdk-go", testSDKVersion)
+			transport := New("echo", tt.options, "sdk-go", testSDKVersion)
 			defer func() {
 				if transport.IsConnected() {
 					_ = transport.Close()

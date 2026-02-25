@@ -119,11 +119,13 @@ func (p *Parser) ParseMessage(data map[string]any) (shared.Message, error) {
 		msg, err = p.parseSystemMessage(data)
 	case shared.MessageTypeResult:
 		msg, err = p.parseResultMessage(data)
+	case shared.MessageTypeStreamEvent:
+		msg, err = p.parseStreamEvent(data)
 	default:
-		return nil, shared.NewMessageParseError(
-			fmt.Sprintf("unknown message type: %s", msgType),
-			data,
-		)
+		// Forward-compatible: skip unrecognized message types so newer
+		// CLI versions don't crash older SDK versions.
+		debugLog("[SDK-Parser] ⚠️ Skipping unknown message type: %s", msgType)
+		return nil, nil
 	}
 
 	// Debug: Log parsed result
@@ -207,6 +209,20 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 		return nil, shared.NewMessageParseError("user message missing message field", data)
 	}
 
+	// Extract top-level fields (NOT nested under "message")
+	var parentToolUseID *string
+	if ptuid, ok := data["parent_tool_use_id"].(string); ok {
+		parentToolUseID = &ptuid
+	}
+	var toolUseResult map[string]interface{}
+	if tur, ok := data["tool_use_result"].(map[string]interface{}); ok {
+		toolUseResult = tur
+	}
+	var uuid *string
+	if u, ok := data["uuid"].(string); ok {
+		uuid = &u
+	}
+
 	content := messageData["content"]
 	if content == nil {
 		return nil, shared.NewMessageParseError("user message missing content field", data)
@@ -219,7 +235,10 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 		// String content - create directly
 		debugLog("[SDK-Parser] 👤 UserMessage has string content: %q", c)
 		return &shared.UserMessage{
-			Content: c,
+			Content:         c,
+			UUID:            uuid,
+			ParentToolUseID: parentToolUseID,
+			ToolUseResult:   toolUseResult,
 		}, nil
 	case []any:
 		// Array of content blocks
@@ -236,7 +255,10 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 			}
 		}
 		return &shared.UserMessage{
-			Content: blocks,
+			Content:         blocks,
+			UUID:            uuid,
+			ParentToolUseID: parentToolUseID,
+			ToolUseResult:   toolUseResult,
 		}, nil
 	default:
 		return nil, shared.NewMessageParseError("invalid user message content type", data)
@@ -276,10 +298,23 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 		}
 	}
 
+	// Extract top-level fields (NOT nested under "message")
+	var parentToolUseID *string
+	if ptuid, ok := data["parent_tool_use_id"].(string); ok {
+		parentToolUseID = &ptuid
+	}
+	var assistantError *shared.AssistantMessageError
+	if errStr, ok := data["error"].(string); ok {
+		e := shared.AssistantMessageError(errStr)
+		assistantError = &e
+	}
+
 	debugLog("[SDK-Parser] 🤖 AssistantMessage parsed successfully")
 	return &shared.AssistantMessage{
-		Content: blocks,
-		Model:   model,
+		Content:         blocks,
+		Model:           model,
+		ParentToolUseID: parentToolUseID,
+		Error:           assistantError,
 	}, nil
 }
 
@@ -354,9 +389,43 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 		}
 	}
 
-	debugLog("[SDK-Parser] ✅ ResultMessage parsed: subtype=%s, session_id=%s, is_error=%v", 
+	if structuredOutput, ok := data["structured_output"]; ok {
+		result.StructuredOutput = structuredOutput
+	}
+
+	debugLog("[SDK-Parser] ✅ ResultMessage parsed: subtype=%s, session_id=%s, is_error=%v",
 		result.Subtype, result.SessionID, result.IsError)
 	return result, nil
+}
+
+// parseStreamEvent parses a stream event from raw JSON data.
+func (p *Parser) parseStreamEvent(data map[string]any) (*shared.StreamEvent, error) {
+	uuid, ok := data["uuid"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("stream_event missing uuid field", data)
+	}
+
+	sessionID, ok := data["session_id"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("stream_event missing session_id field", data)
+	}
+
+	event, ok := data["event"].(map[string]any)
+	if !ok {
+		return nil, shared.NewMessageParseError("stream_event missing event field", data)
+	}
+
+	var parentToolUseID *string
+	if ptuid, ok := data["parent_tool_use_id"].(string); ok {
+		parentToolUseID = &ptuid
+	}
+
+	return &shared.StreamEvent{
+		UUID:            uuid,
+		SessionID:       sessionID,
+		Event:           event,
+		ParentToolUseID: parentToolUseID,
+	}, nil
 }
 
 // parseContentBlock parses a content block based on its type field.

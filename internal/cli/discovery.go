@@ -113,20 +113,13 @@ func getCommonCLILocations() []string {
 }
 
 // BuildCommand constructs the CLI command with all necessary flags.
-func BuildCommand(cliPath string, options *shared.Options, closeStdin bool) []string {
+// Always uses streaming mode (--input-format stream-json) for bidirectional communication.
+func BuildCommand(cliPath string, options *shared.Options) []string {
 	cmd := []string{cliPath}
 
-	// Base arguments - always include these
+	// Base arguments - always use streaming mode
 	cmd = append(cmd, "--output-format", "stream-json", "--verbose")
-
-	// Input mode configuration
-	if closeStdin {
-		// One-shot mode (Query function)
-		cmd = append(cmd, "--print")
-	} else {
-		// Streaming mode (Client interface)
-		cmd = append(cmd, "--input-format", "stream-json")
-	}
+	cmd = append(cmd, "--input-format", "stream-json")
 
 	// Add all configuration options as CLI flags
 	if options != nil {
@@ -136,12 +129,14 @@ func BuildCommand(cliPath string, options *shared.Options, closeStdin bool) []st
 	return cmd
 }
 
-// BuildCommandWithPrompt constructs the CLI command for one-shot queries with prompt as argument.
-func BuildCommandWithPrompt(cliPath string, options *shared.Options, prompt string) []string {
+// BuildCommandWithPrompt constructs the CLI command for one-shot queries.
+// Uses streaming mode; prompt is sent via stdin after initialize.
+func BuildCommandWithPrompt(cliPath string, options *shared.Options) []string {
 	cmd := []string{cliPath}
 
-	// Base arguments - always include these
-	cmd = append(cmd, "--output-format", "stream-json", "--verbose", "--print", prompt)
+	// Base arguments - always use streaming mode
+	cmd = append(cmd, "--output-format", "stream-json", "--verbose")
+	cmd = append(cmd, "--input-format", "stream-json")
 
 	// Add all configuration options as CLI flags
 	if options != nil {
@@ -183,21 +178,37 @@ func addToolControlFlags(cmd []string, options *shared.Options) []string {
 	}
 
 	if len(options.AllowedTools) > 0 {
-		cmd = append(cmd, "--allowed-tools", strings.Join(options.AllowedTools, ","))
+		cmd = append(cmd, "--allowedTools", strings.Join(options.AllowedTools, ","))
 	}
 	if len(options.DisallowedTools) > 0 {
-		cmd = append(cmd, "--disallowed-tools", strings.Join(options.DisallowedTools, ","))
+		cmd = append(cmd, "--disallowedTools", strings.Join(options.DisallowedTools, ","))
 	}
 	return cmd
 }
 
 func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
-	if options.SystemPrompt == nil {
+	switch sp := options.SystemPrompt.(type) {
+	case nil:
 		// When no system prompt is specified, explicitly pass empty string
 		// to give users full control over agent behavior
 		cmd = append(cmd, "--system-prompt", "")
-	} else {
-		cmd = append(cmd, "--system-prompt", *options.SystemPrompt)
+	case string:
+		cmd = append(cmd, "--system-prompt", sp)
+	case *string:
+		if sp != nil {
+			cmd = append(cmd, "--system-prompt", *sp)
+		} else {
+			cmd = append(cmd, "--system-prompt", "")
+		}
+	case shared.SystemPromptPreset:
+		// Preset: only pass --append-system-prompt if "append" is set
+		if sp.Append != nil {
+			cmd = append(cmd, "--append-system-prompt", *sp.Append)
+		}
+	case *shared.SystemPromptPreset:
+		if sp != nil && sp.Append != nil {
+			cmd = append(cmd, "--append-system-prompt", *sp.Append)
+		}
 	}
 	if options.AppendSystemPrompt != nil {
 		cmd = append(cmd, "--append-system-prompt", *options.AppendSystemPrompt)
@@ -208,8 +219,35 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 	if options.FallbackModel != nil {
 		cmd = append(cmd, "--fallback-model", *options.FallbackModel)
 	}
-	if options.MaxThinkingTokens > 0 {
-		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", options.MaxThinkingTokens))
+	// Resolve thinking config → --max-thinking-tokens
+	// `Thinking` takes precedence over the deprecated `MaxThinkingTokens`
+	var resolvedMaxThinkingTokens *int
+	if options.MaxThinkingTokens != nil {
+		v := *options.MaxThinkingTokens
+		resolvedMaxThinkingTokens = &v
+	}
+	if options.Thinking != nil {
+		switch options.Thinking.Type {
+		case shared.ThinkingTypeAdaptive:
+			if resolvedMaxThinkingTokens == nil {
+				v := 32000
+				resolvedMaxThinkingTokens = &v
+			}
+		case shared.ThinkingTypeEnabled:
+			v := options.Thinking.BudgetTokens
+			resolvedMaxThinkingTokens = &v
+		case shared.ThinkingTypeDisabled:
+			v := 0
+			resolvedMaxThinkingTokens = &v
+		}
+	}
+	if resolvedMaxThinkingTokens != nil {
+		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", *resolvedMaxThinkingTokens))
+	}
+
+	// Add effort flag
+	if options.Effort != nil {
+		cmd = append(cmd, "--effort", string(*options.Effort))
 	}
 
 	// Handle betas option
@@ -257,7 +295,7 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 		cmd = append(cmd, "--max-turns", fmt.Sprintf("%d", options.MaxTurns))
 	}
 	if options.MaxBudgetUSD != nil {
-		cmd = append(cmd, "--max-budget-usd", fmt.Sprintf("%.4f", *options.MaxBudgetUSD))
+		cmd = append(cmd, "--max-budget-usd", strconv.FormatFloat(*options.MaxBudgetUSD, 'f', -1, 64))
 	}
 	
 	// Handle settings and sandbox: merge sandbox into settings if both are provided
@@ -392,6 +430,12 @@ func addMCPFlags(cmd []string, options *shared.Options) []string {
 				payload["headers"] = server.Headers
 			}
 			servers[name] = payload
+		case *shared.McpSdkServerConfig:
+			// For SDK servers, pass type only (instance is not serializable)
+			payload := map[string]interface{}{
+				"type": string(shared.McpServerTypeSDK),
+			}
+			servers[name] = payload
 		default:
 			continue
 		}
@@ -418,33 +462,14 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 	if options.ForkSession {
 		cmd = append(cmd, "--fork-session")
 	}
+	// Always emit --setting-sources (empty string if not set, matching Python SDK)
+	sourcesValue := ""
 	if len(options.SettingSources) > 0 {
-		cmd = append(cmd, "--setting-sources", strings.Join(options.SettingSources, ","))
+		sourcesValue = strings.Join(options.SettingSources, ",")
 	}
+	cmd = append(cmd, "--setting-sources", sourcesValue)
 
-	if len(options.Agents) > 0 {
-		agentsPayload := make(map[string]map[string]interface{}, len(options.Agents))
-		for name, def := range options.Agents {
-			entry := map[string]interface{}{
-				"description": def.Description,
-				"prompt":      def.Prompt,
-			}
-			if len(def.Tools) > 0 {
-				entry["tools"] = def.Tools
-			}
-			if def.Model != nil && *def.Model != "" {
-				entry["model"] = *def.Model
-			}
-			agentsPayload[name] = entry
-		}
-
-		if len(agentsPayload) > 0 {
-			data, err := json.Marshal(agentsPayload)
-			if err == nil {
-				cmd = append(cmd, "--agents", string(data))
-			}
-		}
-	}
+	// Note: Agents are now sent via initialize request, not as CLI flag
 
 	// Add plugin directories
 	if len(options.Plugins) > 0 {

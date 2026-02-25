@@ -17,11 +17,14 @@ const (
 	PermissionUpdateTypeRemoveDirectories = shared.PermissionUpdateTypeRemoveDirectories
 )
 
-type PermissionDestination = shared.PermissionDestination
+// Note: PermissionDestination is re-exported in options.go
+
+type PermissionBehavior = shared.PermissionBehavior
 
 const (
-	PermissionDestinationSession  = shared.PermissionDestinationSession
-	PermissionDestinationSettings = shared.PermissionDestinationSettings
+	PermissionBehaviorAllow = shared.PermissionBehaviorAllow
+	PermissionBehaviorDeny  = shared.PermissionBehaviorDeny
+	PermissionBehaviorAsk   = shared.PermissionBehaviorAsk
 )
 
 type PermissionRule = shared.PermissionRule
@@ -31,6 +34,9 @@ type PermissionResultAllow = shared.PermissionResultAllow
 type PermissionResultDeny = shared.PermissionResultDeny
 type PermissionResult = shared.PermissionResult
 type CanUseToolCallback = shared.CanUseToolCallback
+
+// CanUseTool is an alias for CanUseToolCallback, matching the Python SDK name.
+type CanUseTool = shared.CanUseToolCallback
 
 // Helper functions
 var (

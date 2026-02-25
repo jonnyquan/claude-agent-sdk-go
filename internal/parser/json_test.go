@@ -90,11 +90,7 @@ func TestParseErrors(t *testing.T) {
 			data:        map[string]any{"message": map[string]any{"content": "test"}},
 			expectError: "missing or invalid type field",
 		},
-		{
-			name:        "unknown_message_type",
-			data:        map[string]any{"type": "unknown_type", "content": "test"},
-			expectError: "unknown message type: unknown_type",
-		},
+		// Note: unknown_message_type now returns nil, nil (forward-compatible parsing)
 		{
 			name:        "user_message_missing_message_field",
 			data:        map[string]any{"type": "user"},
@@ -391,18 +387,19 @@ func TestParseMessages(t *testing.T) {
 	assertNoParseError(t, err)
 	assertMessageCount(t, messages, 2)
 
-	// Test error handling
-	errorLines := []string{
+	// Test forward-compatible parsing: unknown types are skipped, not errors
+	mixedLines := []string{
 		`{"type": "user", "message": {"content": "Valid"}}`,
-		`{"type": "invalid"}`, // This should cause an error
+		`{"type": "invalid"}`, // Unknown type - should be skipped
 	}
 
-	_, err = ParseMessages(errorLines)
-	if err == nil {
-		t.Error("Expected error for invalid message type")
+	mixedMsgs, err := ParseMessages(mixedLines)
+	if err != nil {
+		t.Errorf("Expected no error for unknown message types, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "error parsing line 1") {
-		t.Errorf("Expected line number in error, got: %v", err)
+	// Only the valid user message should be returned
+	if len(mixedMsgs) != 1 {
+		t.Errorf("Expected 1 message (unknown type skipped), got %d", len(mixedMsgs))
 	}
 }
 
@@ -461,19 +458,7 @@ func TestParseErrorConditions(t *testing.T) {
 			},
 			expectError: "assistant message missing model field",
 		},
-		{
-			name: "assistant_message_content_block_error",
-			data: map[string]any{
-				"type": "assistant",
-				"message": map[string]any{
-					"content": []any{
-						map[string]any{"type": "text"}, // missing required "text" field
-					},
-					"model": "claude-3",
-				},
-			},
-			expectError: "failed to parse content block 0",
-		},
+		// Note: unknown content block types are now skipped (forward-compatible parsing)
 		{
 			name:        "system_message_missing_subtype",
 			data:        map[string]any{"type": "system"},
@@ -771,25 +756,26 @@ func TestContentBlockOptionalFields(t *testing.T) {
 func TestProcessLineEdgeCases(t *testing.T) {
 	parser := setupParserTest(t)
 
-	// Test line with unknown content block type - should be skipped (not error)
+	// Test line with unknown content block type - should be skipped (forward-compatible)
 	unknownBlockLine := `{"type": "user", "message": {"content": [{"type": "unknown_block"}]}}`
 	messages, err := parser.ProcessLine(unknownBlockLine)
 	if err != nil {
-		t.Errorf("Expected no error for unknown content block type, got %v", err)
+		t.Errorf("Expected no error for unknown content block type, got: %v", err)
 	}
+	// Message should be parsed with unknown block skipped
 	if len(messages) != 1 {
-		t.Errorf("Expected 1 message with skipped block, got %d", len(messages))
+		t.Errorf("Expected 1 message (unknown block skipped), got %d", len(messages))
 	}
 
-	// Test multiple lines with one having an error
+	// Test multiple lines with one having an unknown type - both should be handled
 	mixedLine := `{"type": "system", "subtype": "ok"}` + "\n" + `{"type": "invalid"}`
 	messages2, err2 := parser.ProcessLine(mixedLine)
-	if err2 == nil {
-		t.Error("Expected error for second invalid message")
+	if err2 != nil {
+		t.Errorf("Expected no error for unknown message type, got: %v", err2)
 	}
-	// Should return the first valid message before error
+	// System message should be returned, invalid type skipped
 	if len(messages2) != 1 {
-		t.Errorf("Expected 1 message before error, got %d", len(messages2))
+		t.Errorf("Expected 1 message (unknown type skipped), got %d", len(messages2))
 	}
 }
 

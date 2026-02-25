@@ -36,6 +36,9 @@ type ToolUseBlock = shared.ToolUseBlock
 // ToolResultBlock represents a tool result content block.
 type ToolResultBlock = shared.ToolResultBlock
 
+// StreamEvent represents a stream event for partial message updates.
+type StreamEvent = shared.StreamEvent
+
 // Note: ImageBlock removed - not part of Python SDK ContentBlock types
 
 // AgentDefinition represents a custom agent configuration.
@@ -49,10 +52,11 @@ type MessageIterator = shared.MessageIterator
 
 // Re-export message type constants
 const (
-	MessageTypeUser      = shared.MessageTypeUser
-	MessageTypeAssistant = shared.MessageTypeAssistant
-	MessageTypeSystem    = shared.MessageTypeSystem
-	MessageTypeResult    = shared.MessageTypeResult
+	MessageTypeUser        = shared.MessageTypeUser
+	MessageTypeAssistant   = shared.MessageTypeAssistant
+	MessageTypeSystem      = shared.MessageTypeSystem
+	MessageTypeResult      = shared.MessageTypeResult
+	MessageTypeStreamEvent = shared.MessageTypeStreamEvent
 )
 
 // Re-export content block type constants
@@ -86,4 +90,8 @@ type Transport interface {
 	Interrupt(ctx context.Context) error
 	Close() error
 	RewindFiles(ctx context.Context, userMessageID string) error
+	GetMCPStatus(ctx context.Context) (map[string]any, error)
+	SetPermissionMode(ctx context.Context, mode string) error
+	SetModel(ctx context.Context, model *string) error
+	GetServerInfo() map[string]any
 }

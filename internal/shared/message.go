@@ -6,10 +6,11 @@ import (
 
 // Message type constants
 const (
-	MessageTypeUser      = "user"
-	MessageTypeAssistant = "assistant"
-	MessageTypeSystem    = "system"
-	MessageTypeResult    = "result"
+	MessageTypeUser        = "user"
+	MessageTypeAssistant   = "assistant"
+	MessageTypeSystem      = "system"
+	MessageTypeResult      = "result"
+	MessageTypeStreamEvent = "stream_event"
 )
 
 // Content block type constants
@@ -45,10 +46,11 @@ type ContentBlock interface {
 
 // UserMessage represents a message from the user.
 type UserMessage struct {
-	MessageType     string      `json:"type"`
-	Content         interface{} `json:"content"` // string or []ContentBlock
-	UUID            *string     `json:"uuid,omitempty"`
-	ParentToolUseID *string     `json:"parent_tool_use_id,omitempty"`
+	MessageType     string                 `json:"type"`
+	Content         interface{}            `json:"content"` // string or []ContentBlock
+	UUID            *string                `json:"uuid,omitempty"`
+	ParentToolUseID *string                `json:"parent_tool_use_id,omitempty"`
+	ToolUseResult   map[string]interface{} `json:"tool_use_result,omitempty"`
 }
 
 // Type returns the message type for UserMessage.
@@ -447,6 +449,44 @@ func (b *ToolResultBlock) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	b.Type = ContentBlockTypeToolResult
+	return nil
+}
+
+// StreamEvent represents a stream event for partial message updates during streaming.
+type StreamEvent struct {
+	MessageType     string         `json:"type"`
+	UUID            string         `json:"uuid"`
+	SessionID       string         `json:"session_id"`
+	Event           map[string]any `json:"event"`
+	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"`
+}
+
+// Type returns the message type for StreamEvent.
+func (m *StreamEvent) Type() string {
+	return MessageTypeStreamEvent
+}
+
+// MarshalJSON implements custom JSON marshaling for StreamEvent
+func (m *StreamEvent) MarshalJSON() ([]byte, error) {
+	type streamEvent StreamEvent
+	temp := struct {
+		Type string `json:"type"`
+		*streamEvent
+	}{
+		Type:        MessageTypeStreamEvent,
+		streamEvent: (*streamEvent)(m),
+	}
+	return json.Marshal(temp)
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for StreamEvent
+func (m *StreamEvent) UnmarshalJSON(data []byte) error {
+	type streamEvent StreamEvent
+	temp := (*streamEvent)(m)
+	if err := json.Unmarshal(data, temp); err != nil {
+		return err
+	}
+	m.MessageType = MessageTypeStreamEvent
 	return nil
 }
 

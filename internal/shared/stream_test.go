@@ -17,7 +17,7 @@ func TestStreamMessageJSON(t *testing.T) {
 		{
 			name: "complete_message",
 			msg: &StreamMessage{
-				Type:            "request",
+				Type:            "user",
 				Message:         "test message",
 				ParentToolUseID: stringPtr("tool-123"),
 				SessionID:       "session-456",
@@ -26,7 +26,7 @@ func TestStreamMessageJSON(t *testing.T) {
 				Response:        map[string]any{"status": "ok"},
 			},
 			expected: map[string]any{
-				"type":               "request",
+				"type":               "user",
 				"message":            "test message",
 				"parent_tool_use_id": "tool-123",
 				"session_id":         "session-456",

@@ -20,14 +20,25 @@ const (
 type PermissionDestination string
 
 const (
-	PermissionDestinationSession  PermissionDestination = "session"
-	PermissionDestinationSettings PermissionDestination = "settings"
+	PermissionDestinationSession         PermissionDestination = "session"
+	PermissionDestinationUserSettings    PermissionDestination = "userSettings"
+	PermissionDestinationProjectSettings PermissionDestination = "projectSettings"
+	PermissionDestinationLocalSettings   PermissionDestination = "localSettings"
+)
+
+// PermissionBehavior represents the behavior for a permission decision.
+type PermissionBehavior string
+
+const (
+	PermissionBehaviorAllow PermissionBehavior = "allow"
+	PermissionBehaviorDeny  PermissionBehavior = "deny"
+	PermissionBehaviorAsk   PermissionBehavior = "ask"
 )
 
 // PermissionRule represents a rule for tool permissions.
 type PermissionRule struct {
-	ToolName    string `json:"toolName"`
-	RuleContent string `json:"ruleContent"`
+	ToolName    string  `json:"toolName"`
+	RuleContent *string `json:"ruleContent"`
 }
 
 // PermissionUpdate represents a permission update request.
@@ -102,7 +113,7 @@ func NewPermissionDeny(message string, interrupt bool) *PermissionResultDeny {
 }
 
 // NewPermissionRule creates a permission rule.
-func NewPermissionRule(toolName, ruleContent string) PermissionRule {
+func NewPermissionRule(toolName string, ruleContent *string) PermissionRule {
 	return PermissionRule{
 		ToolName:    toolName,
 		RuleContent: ruleContent,

@@ -145,7 +145,7 @@ func (qi *queryIterator) start() error {
 	// Send the prompt
 	userMsg := &UserMessage{Content: qi.prompt}
 	streamMsg := StreamMessage{
-		Type:    "request",
+		Type:    "user",
 		Message: userMsg,
 	}
 

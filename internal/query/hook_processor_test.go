@@ -20,7 +20,7 @@ func TestHookProcessor_BuildInitializeConfig(t *testing.T) {
 	options.Hooks = map[string][]any{
 		string(shared.HookEventPreToolUse): {
 			shared.HookMatcher{
-				Matcher: "Bash",
+				Matcher: stringPtr("Bash"),
 				Hooks:   []shared.HookCallback{testHook},
 			},
 		},
@@ -107,6 +107,8 @@ func TestHookProcessor_ProcessHookCallback(t *testing.T) {
 		t.Errorf("Expected permissionDecision 'allow', got %v", hookSpecific["permissionDecision"])
 	}
 }
+
+func stringPtr(s string) *string { return &s }
 
 func TestHookProcessor_ProcessCanUseTool(t *testing.T) {
 	ctx := context.Background()

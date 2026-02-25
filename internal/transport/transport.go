@@ -9,8 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,12 +25,6 @@ const (
 	channelBufferSize = 10
 	// terminationTimeoutSeconds is the timeout for graceful process termination.
 	terminationTimeoutSeconds = 5
-	// windowsOS is the GOOS value for Windows platform.
-	windowsOS = "windows"
-	// cmdLengthLimitWindows is the command line length limit for Windows (cmd.exe has 8191 char limit)
-	cmdLengthLimitWindows = 8000
-	// cmdLengthLimitOther is the command line length limit for other platforms
-	cmdLengthLimitOther = 100000
 )
 
 // Transport implements the Transport interface using subprocess communication.
@@ -41,8 +33,7 @@ type Transport struct {
 	cmd        *exec.Cmd
 	cliPath    string
 	options    *shared.Options
-	closeStdin bool
-	promptArg  *string // For one-shot queries, prompt passed as CLI argument
+	promptArg  *string // For one-shot queries, prompt sent via stdin after initialize
 	entrypoint string  // CLAUDE_CODE_ENTRYPOINT value (sdk-go or sdk-go-client)
 	sdkVersion string  // CLAUDE_AGENT_SDK_VERSION value
 
@@ -62,36 +53,37 @@ type Transport struct {
 	msgChan chan shared.Message
 	errChan chan error
 
-	// Hook and control protocol support
+	// Hook and control protocol support (always initialized in streaming mode)
 	controlProtocol *query.ControlProtocol
 	hookProcessor   *query.HookProcessor
-	isStreamingMode bool
+
+	// Server initialization info (stored from initialize response)
+	serverInfo map[string]any
 
 	// Control and cleanup
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	tempFiles []string // Track temporary files for cleanup
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // New creates a new subprocess transport.
-func New(cliPath string, options *shared.Options, closeStdin bool, entrypoint string, sdkVersion string) *Transport {
+// Always uses streaming mode for bidirectional communication.
+func New(cliPath string, options *shared.Options, entrypoint string, sdkVersion string) *Transport {
 	return &Transport{
 		cliPath:    cliPath,
 		options:    options,
-		closeStdin: closeStdin,
 		entrypoint: entrypoint,
 		sdkVersion: sdkVersion,
 		parser:     parsing.New(),
 	}
 }
 
-// NewWithPrompt creates a new subprocess transport for one-shot queries with prompt as CLI argument.
+// NewWithPrompt creates a new subprocess transport for one-shot queries.
+// Prompt is sent via stdin after initialize.
 func NewWithPrompt(cliPath string, options *shared.Options, prompt string, sdkVersion string) *Transport {
 	return &Transport{
 		cliPath:    cliPath,
 		options:    options,
-		closeStdin: true,
 		entrypoint: "sdk-go", // Query mode uses sdk-go
 		sdkVersion: sdkVersion,
 		parser:     parsing.New(),
@@ -115,43 +107,32 @@ func (t *Transport) Connect(ctx context.Context) error {
 		return fmt.Errorf("transport already connected")
 	}
 
-	// Build command with all options
-	var args []string
-	if t.promptArg != nil {
-		// One-shot query with prompt as CLI argument
-		args = discovery.BuildCommandWithPrompt(t.cliPath, t.options, *t.promptArg)
-	} else {
-		// Streaming mode or regular one-shot
-		args = discovery.BuildCommand(t.cliPath, t.options, t.closeStdin)
-	}
-
-	// Handle command line length limits (Windows compatibility)
-	if err := t.handleCommandLineLength(&args); err != nil {
-		return fmt.Errorf("failed to handle command line length: %w", err)
-	}
+	// Build command - always use streaming mode
+	args := discovery.BuildCommand(t.cliPath, t.options)
 
 	//nolint:gosec // G204: This is the core CLI SDK functionality - subprocess execution is required
 	t.cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 
-	// Set up environment - idiomatic Go: start with system env
+	// Set up environment: system env → user env → SDK vars (SDK always wins)
 	env := os.Environ()
 
-	// Add SDK identifier (required)
+	// Merge custom environment variables (user-provided, can be overridden by SDK vars)
+	if t.options != nil && t.options.ExtraEnv != nil {
+		for key, value := range t.options.ExtraEnv {
+			env = append(env, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+
+	// SDK identifier vars come last (override all, matching Python SDK behavior)
 	env = append(env, "CLAUDE_CODE_ENTRYPOINT="+t.entrypoint)
 	if t.sdkVersion != "" {
 		env = append(env, fmt.Sprintf("CLAUDE_AGENT_SDK_VERSION=%s", t.sdkVersion))
 	}
 
-	// Merge custom environment variables
-	if t.options != nil && t.options.ExtraEnv != nil {
-		for key, value := range t.options.ExtraEnv {
-			// Use fmt.Sprintf for clarity and consistency
-			env = append(env, fmt.Sprintf("%s=%s", key, value))
-		}
+	// Enable file checkpointing if requested
+	if t.options != nil && t.options.EnableFileCheckpointing {
+		env = append(env, "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true")
 	}
-
-	// Apply environment to command
-	t.cmd.Env = env
 
 	// Set working directory if specified
 	if t.options != nil && t.options.Cwd != nil {
@@ -159,16 +140,18 @@ func (t *Transport) Connect(ctx context.Context) error {
 			return err
 		}
 		t.cmd.Dir = *t.options.Cwd
+		// Set PWD env var to match Python SDK behavior
+		env = append(env, fmt.Sprintf("PWD=%s", *t.options.Cwd))
 	}
 
-	// Set up I/O pipes
+	// Apply environment to command
+	t.cmd.Env = env
+
+	// Set up I/O pipes - always create stdin for streaming mode
 	var err error
-	if t.promptArg == nil {
-		// Only create stdin pipe if we need to send messages via stdin
-		t.stdin, err = t.cmd.StdinPipe()
-		if err != nil {
-			return fmt.Errorf("failed to create stdin pipe: %w", err)
-		}
+	t.stdin, err = t.cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
 
 	t.stdout, err = t.cmd.StdoutPipe()
@@ -177,7 +160,6 @@ func (t *Transport) Connect(ctx context.Context) error {
 	}
 
 	// Capture stderr with pipe for error visibility
-	// Using pipe + goroutine to prevent deadlocks while maintaining error diagnostics
 	stderrPipe, err := t.cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -207,35 +189,82 @@ func (t *Transport) Connect(ctx context.Context) error {
 	t.wg.Add(1)
 	go t.handleStdout()
 
-	// Note: Do NOT close stdin here for one-shot mode
-	// The CLI still needs stdin to receive the message, even with --print flag
-	// stdin will be closed after sending the message in SendMessage()
+	// Always initialize control protocol for streaming mode
 
-	// Initialize hook support for streaming mode
-	t.isStreamingMode = !t.closeStdin && t.promptArg == nil
-	if t.isStreamingMode && t.options != nil && len(t.options.Hooks) > 0 {
-		// Create hook processor
+	// Create hook processor if hooks are configured
+	if t.options != nil && len(t.options.Hooks) > 0 {
 		t.hookProcessor = query.NewHookProcessor(t.ctx, t.options)
-		
-		// Create write function for control protocol
-		writeFn := func(data []byte) error {
-			t.mu.RLock()
-			defer t.mu.RUnlock()
-			
-			if !t.connected || t.stdin == nil {
-				return fmt.Errorf("transport not connected")
-			}
-			
-			_, err := t.stdin.Write(data)
-			return err
+	}
+
+	// Create write function for control protocol
+	writeFn := func(data []byte) error {
+		t.mu.RLock()
+		defer t.mu.RUnlock()
+
+		if !t.connected || t.stdin == nil {
+			return fmt.Errorf("transport not connected")
 		}
-		
-		// Create control protocol handler
-		t.controlProtocol = query.NewControlProtocol(t.ctx, t.hookProcessor, writeFn)
-		
-		// Send initialization request to CLI
-		if _, err := t.controlProtocol.Initialize(); err != nil {
-			return fmt.Errorf("failed to initialize control protocol: %w", err)
+
+		_, err := t.stdin.Write(data)
+		return err
+	}
+
+	// Build SDK MCP servers map
+	var sdkMCPServers map[string]shared.McpSDKServer
+	if t.options != nil && len(t.options.McpServers) > 0 {
+		sdkMCPServers = make(map[string]shared.McpSDKServer)
+		for name, cfg := range t.options.McpServers {
+			if sdkCfg, ok := cfg.(*shared.McpSdkServerConfig); ok && sdkCfg.Instance != nil {
+				sdkMCPServers[name] = sdkCfg.Instance
+			}
+		}
+	}
+
+	// Create control protocol handler
+	t.controlProtocol = query.NewControlProtocol(t.ctx, t.hookProcessor, writeFn, sdkMCPServers)
+
+	// Build agents dict for initialize request
+	var agentsDict map[string]map[string]any
+	if t.options != nil && len(t.options.Agents) > 0 {
+		agentsDict = make(map[string]map[string]any, len(t.options.Agents))
+		for name, def := range t.options.Agents {
+			entry := map[string]any{
+				"description": def.Description,
+				"prompt":      def.Prompt,
+			}
+			if len(def.Tools) > 0 {
+				entry["tools"] = def.Tools
+			}
+			if def.Model != nil && *def.Model != "" {
+				entry["model"] = *def.Model
+			}
+			agentsDict[name] = entry
+		}
+	}
+
+	// Send initialization request to CLI
+	initResult, err := t.controlProtocol.Initialize(agentsDict)
+	if err != nil {
+		return fmt.Errorf("failed to initialize control protocol: %w", err)
+	}
+	t.serverInfo = initResult
+
+	// For one-shot queries, send the prompt via stdin after initialize
+	if t.promptArg != nil {
+		streamMsg := shared.StreamMessage{
+			Type: "user",
+			Message: map[string]interface{}{
+				"role":    "user",
+				"content": *t.promptArg,
+			},
+			SessionID: "default",
+		}
+		data, marshalErr := json.Marshal(streamMsg)
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal prompt message: %w", marshalErr)
+		}
+		if _, writeErr := t.stdin.Write(append(data, '\n')); writeErr != nil {
+			return fmt.Errorf("failed to send prompt: %w", writeErr)
 		}
 	}
 
@@ -247,12 +276,6 @@ func (t *Transport) Connect(ctx context.Context) error {
 func (t *Transport) SendMessage(ctx context.Context, message shared.StreamMessage) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	// For one-shot queries with promptArg, the prompt is already passed as CLI argument
-	// so we don't need to send any messages via stdin
-	if t.promptArg != nil {
-		return nil // No-op for one-shot queries
-	}
 
 	if !t.connected || t.stdin == nil {
 		return fmt.Errorf("transport not connected or stdin closed")
@@ -277,12 +300,6 @@ func (t *Transport) SendMessage(ctx context.Context, message shared.StreamMessag
 		return fmt.Errorf("failed to write message: %w", err)
 	}
 
-	// For one-shot mode, close stdin after sending the message
-	if t.closeStdin {
-		_ = t.stdin.Close()
-		t.stdin = nil
-	}
-
 	return nil
 }
 
@@ -303,22 +320,68 @@ func (t *Transport) ReceiveMessages(_ context.Context) (<-chan shared.Message, <
 	return t.msgChan, t.errChan
 }
 
-// Interrupt sends an interrupt signal to the subprocess.
+// Interrupt sends an interrupt control request to the CLI subprocess.
+// Uses the control protocol (matching Python SDK behavior) rather than SIGINT.
 func (t *Transport) Interrupt(_ context.Context) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	if !t.connected || t.cmd == nil || t.cmd.Process == nil {
-		return fmt.Errorf("process not running")
+	if !t.connected {
+		return fmt.Errorf("transport not connected")
 	}
 
-	// Windows doesn't support os.Interrupt signal
-	if runtime.GOOS == windowsOS {
-		return fmt.Errorf("interrupt not supported by windows")
+	if t.controlProtocol == nil {
+		return fmt.Errorf("control protocol not initialized")
 	}
 
-	// Send interrupt signal (Unix/Linux/macOS)
-	return t.cmd.Process.Signal(os.Interrupt)
+	return t.controlProtocol.InterruptControl()
+}
+
+// GetMCPStatus queries the MCP server status from CLI.
+func (t *Transport) GetMCPStatus(_ context.Context) (map[string]any, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if !t.connected {
+		return nil, fmt.Errorf("transport not connected")
+	}
+
+	if t.controlProtocol == nil {
+		return nil, fmt.Errorf("control protocol not initialized")
+	}
+
+	return t.controlProtocol.GetMCPStatus()
+}
+
+// SetPermissionMode changes the permission mode during conversation.
+func (t *Transport) SetPermissionMode(_ context.Context, mode string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if !t.connected || t.controlProtocol == nil {
+		return fmt.Errorf("transport not connected")
+	}
+
+	return t.controlProtocol.SetPermissionMode(mode)
+}
+
+// SetModel changes the AI model during conversation.
+func (t *Transport) SetModel(_ context.Context, model *string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if !t.connected || t.controlProtocol == nil {
+		return fmt.Errorf("transport not connected")
+	}
+
+	return t.controlProtocol.SetModel(model)
+}
+
+// GetServerInfo returns the server initialization info.
+func (t *Transport) GetServerInfo() map[string]any {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.serverInfo
 }
 
 // RewindFiles rewinds tracked files to their state at a specific user message.
@@ -344,11 +407,6 @@ func (t *Transport) Close() error {
 	defer t.mu.Unlock()
 
 	if !t.connected {
-		// Clean up temp files even if already closed
-		for _, tempFile := range t.tempFiles {
-			_ = os.Remove(tempFile)
-		}
-		t.tempFiles = nil
 		return nil // Already closed
 	}
 
@@ -384,7 +442,6 @@ func (t *Transport) Close() error {
 		// Goroutines finished gracefully
 	case <-time.After(terminationTimeoutSeconds * time.Second):
 		// Timeout: proceed with cleanup anyway
-		// Goroutines should terminate when process is killed
 	}
 
 	// Terminate process with 5-second timeout
@@ -407,14 +464,16 @@ func (t *Transport) readStderr(stderr io.ReadCloser) {
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
 		line := scanner.Text()
-		// Log stderr for debugging - users can see CLI errors
-		// In production, you might want to use a proper logger
 		if len(line) > 0 {
-			// Send to error channel for visibility
-			select {
-			case t.errChan <- fmt.Errorf("CLI stderr: %s", line):
-			default:
-				// Channel full, skip (prevent blocking)
+			// If stderr callback is configured, call it
+			if t.options != nil && t.options.Stderr != nil {
+				t.options.Stderr(line)
+			} else {
+				select {
+				case t.errChan <- fmt.Errorf("CLI stderr: %s", line):
+				default:
+					// Channel full, skip (prevent blocking)
+				}
 			}
 		}
 	}
@@ -442,22 +501,19 @@ func (t *Transport) handleStdout() {
 
 		// Check if this is a control message and route accordingly
 		if t.controlProtocol != nil {
-			// Try to parse as JSON to check message type
 			var rawMsg map[string]any
 			if err := json.Unmarshal([]byte(line), &rawMsg); err == nil {
 				if msgType, ok := rawMsg["type"].(string); ok {
-					// Route control messages to control protocol
 					switch msgType {
 					case "control_request", "control_response", "control_cancel_request":
 						if err := t.controlProtocol.HandleIncomingMessage(msgType, []byte(line)); err != nil {
-							// Log error but don't stop processing
 							select {
 							case t.errChan <- fmt.Errorf("control protocol error: %w", err):
 							case <-t.ctx.Done():
 								return
 							}
 						}
-						continue // Don't send control messages to regular message channel
+						continue
 					}
 				}
 			}
@@ -488,7 +544,6 @@ func (t *Transport) handleStdout() {
 
 	if err := scanner.Err(); err != nil {
 		scanErr := fmt.Errorf("stdout scanner error: %w", err)
-		// Signal all pending control requests so they fail fast instead of timing out
 		if t.controlProtocol != nil {
 			t.controlProtocol.FailPendingRequests(scanErr)
 		}
@@ -500,7 +555,6 @@ func (t *Transport) handleStdout() {
 }
 
 // isProcessAlreadyFinishedError checks if an error indicates the process has already terminated.
-// This follows the Python SDK pattern of suppressing "process not found" type errors.
 func isProcessAlreadyFinishedError(err error) bool {
 	if err == nil {
 		return false
@@ -520,21 +574,18 @@ func (t *Transport) terminateProcess() error {
 
 	// Send SIGTERM
 	if err := t.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		// If process is already finished, that's success
 		if isProcessAlreadyFinishedError(err) {
 			return nil
 		}
-		// If SIGTERM fails for other reasons, try SIGKILL immediately
 		killErr := t.cmd.Process.Kill()
 		if killErr != nil && !isProcessAlreadyFinishedError(killErr) {
 			return killErr
 		}
-		return nil // Don't return error for expected termination
+		return nil
 	}
 
 	// Wait exactly 5 seconds
 	done := make(chan error, 1)
-	// Capture cmd while we know it's valid to avoid data race
 	cmd := t.cmd
 	go func() {
 		done <- cmd.Wait()
@@ -542,121 +593,33 @@ func (t *Transport) terminateProcess() error {
 
 	select {
 	case err := <-done:
-		// Normal termination or expected signals are not errors
 		if err != nil {
-			// Check if it's an expected exit signal
 			if strings.Contains(err.Error(), "signal:") {
-				return nil // Expected signal termination
+				return nil
 			}
 		}
 		return err
 	case <-time.After(terminationTimeoutSeconds * time.Second):
-		// Force kill after 5 seconds
 		if killErr := t.cmd.Process.Kill(); killErr != nil && !isProcessAlreadyFinishedError(killErr) {
 			return killErr
 		}
-		// Wait for process to exit after kill
 		<-done
 		return nil
 	case <-t.ctx.Done():
-		// Context canceled - force kill immediately
 		if killErr := t.cmd.Process.Kill(); killErr != nil && !isProcessAlreadyFinishedError(killErr) {
 			return killErr
 		}
-		// Wait for process to exit after kill, but don't return context error
-		// since this is normal cleanup behavior
 		<-done
 		return nil
 	}
-}
-
-// handleCommandLineLength checks command line length and uses temp files if needed (Windows compatibility)
-func (t *Transport) handleCommandLineLength(args *[]string) error {
-	// Calculate command line length
-	cmdStr := strings.Join(*args, " ")
-	cmdLength := len(cmdStr)
-
-	// Determine limit based on platform
-	limit := cmdLengthLimitOther
-	if runtime.GOOS == windowsOS {
-		limit = cmdLengthLimitWindows
-	}
-
-	// Check if command exceeds limit
-	if cmdLength <= limit {
-		return nil // No action needed
-	}
-
-	// Command is too long - find --agents argument and move to temp file
-	// This only applies if we have agents configured
-	if t.options == nil || len(t.options.Agents) == 0 {
-		return nil // No agents to optimize
-	}
-
-	// Find --agents flag index
-	agentsIdx := -1
-	for i, arg := range *args {
-		if arg == "--agents" && i+1 < len(*args) {
-			agentsIdx = i
-			break
-		}
-	}
-
-	if agentsIdx == -1 {
-		// No --agents flag found, can't optimize
-		return fmt.Errorf("command line length (%d) exceeds limit (%d) but no --agents flag found to optimize", cmdLength, limit)
-	}
-
-	// Get agents JSON value
-	agentsJSON := (*args)[agentsIdx+1]
-
-	// Create temporary file
-	tempFile, err := os.CreateTemp("", "claude-agents-*.json")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer tempFile.Close()
-
-	// Write agents JSON to temp file
-	if _, err := tempFile.WriteString(agentsJSON); err != nil {
-		_ = os.Remove(tempFile.Name())
-		return fmt.Errorf("failed to write temp file: %w", err)
-	}
-
-	// Get absolute path
-	absPath, err := filepath.Abs(tempFile.Name())
-	if err != nil {
-		_ = os.Remove(tempFile.Name())
-		return fmt.Errorf("failed to get absolute path: %w", err)
-	}
-
-	// Track temp file for cleanup
-	t.tempFiles = append(t.tempFiles, absPath)
-
-	// Replace agents JSON with @filepath reference
-	(*args)[agentsIdx+1] = "@" + absPath
-
-	// Log the optimization
-	fmt.Fprintf(os.Stderr, "Command line length (%d) exceeds limit (%d). Using temp file for --agents: %s\n",
-		cmdLength, limit, absPath)
-
-	return nil
 }
 
 // cleanup cleans up all resources
 func (t *Transport) cleanup() {
-	// Clean up temporary files first
-	for _, tempFile := range t.tempFiles {
-		_ = os.Remove(tempFile)
-	}
-	t.tempFiles = nil
-
 	if t.stdout != nil {
 		_ = t.stdout.Close()
 		t.stdout = nil
 	}
-
-	// Note: stderr is now handled via pipe, no cleanup needed
 
 	// Reset state
 	t.cmd = nil

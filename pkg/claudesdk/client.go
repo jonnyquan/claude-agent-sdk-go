@@ -23,6 +23,10 @@ type Client interface {
 	ReceiveResponse(ctx context.Context) MessageIterator
 	Interrupt(ctx context.Context) error
 	RewindFiles(ctx context.Context, userMessageID string) error
+	GetMCPStatus(ctx context.Context) (map[string]any, error)
+	SetPermissionMode(ctx context.Context, mode string) error
+	SetModel(ctx context.Context, model *string) error
+	GetServerInfo() map[string]any
 }
 
 // ClientImpl implements the Client interface.
@@ -231,8 +235,8 @@ func (c *ClientImpl) Connect(ctx context.Context, _ ...StreamMessage) error {
 			}
 		}
 
-		// Create subprocess transport for streaming mode (closeStdin=false)
-		c.transport = transport.New(cliPath, c.options, false, "sdk-go-client", Version)
+		// Create subprocess transport (always uses streaming mode)
+		c.transport = transport.New(cliPath, c.options, "sdk-go-client", Version)
 	}
 
 	// Connect the transport
@@ -453,6 +457,74 @@ func (c *ClientImpl) RewindFiles(ctx context.Context, userMessageID string) erro
 	}
 
 	return transport.RewindFiles(ctx, userMessageID)
+}
+
+// GetMCPStatus queries the MCP server status from CLI.
+func (c *ClientImpl) GetMCPStatus(ctx context.Context) (map[string]any, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	return transport.GetMCPStatus(ctx)
+}
+
+// SetPermissionMode changes the permission mode during conversation.
+func (c *ClientImpl) SetPermissionMode(ctx context.Context, mode string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return fmt.Errorf("client not connected")
+	}
+
+	return transport.SetPermissionMode(ctx, mode)
+}
+
+// SetModel changes the AI model during conversation.
+func (c *ClientImpl) SetModel(ctx context.Context, model *string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return fmt.Errorf("client not connected")
+	}
+
+	return transport.SetModel(ctx, model)
+}
+
+// GetServerInfo returns the server initialization info.
+func (c *ClientImpl) GetServerInfo() map[string]any {
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return nil
+	}
+
+	return transport.GetServerInfo()
 }
 
 // clientIterator implements MessageIterator for client message reception

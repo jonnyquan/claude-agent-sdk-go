@@ -37,11 +37,26 @@ type ToolsPreset = shared.ToolsPreset
 // ToolsOption can be either a list of tool names or a preset.
 type ToolsOption = shared.ToolsOption
 
+// ThinkingType represents the type of thinking configuration.
+type ThinkingType = shared.ThinkingType
+
+// ThinkingConfig controls extended thinking behavior.
+type ThinkingConfig = shared.ThinkingConfig
+
+// EffortLevel controls the effort/depth of thinking.
+type EffortLevel = shared.EffortLevel
+
 // PluginType defines the type of plugin.
 type PluginType = shared.PluginType
 
 // PluginConfig represents plugin configuration.
 type PluginConfig = shared.PluginConfig
+
+// SettingSource represents a configuration source.
+type SettingSource = shared.SettingSource
+
+// PermissionDestination specifies where the permission update applies.
+type PermissionDestination = shared.PermissionDestination
 
 // Sandbox configuration types
 type SandboxSettings = shared.SandboxSettings
@@ -61,6 +76,24 @@ const (
 	PluginTypeLocal                 = shared.PluginTypeLocal
 	// Beta features
 	SdkBetaContext1M = shared.SdkBetaContext1M
+	// Thinking types
+	ThinkingTypeAdaptive = shared.ThinkingTypeAdaptive
+	ThinkingTypeEnabled  = shared.ThinkingTypeEnabled
+	ThinkingTypeDisabled = shared.ThinkingTypeDisabled
+	// Effort levels
+	EffortLow    = shared.EffortLow
+	EffortMedium = shared.EffortMedium
+	EffortHigh   = shared.EffortHigh
+	EffortMax    = shared.EffortMax
+	// Setting sources
+	SettingSourceUser    = shared.SettingSourceUser
+	SettingSourceProject = shared.SettingSourceProject
+	SettingSourceLocal   = shared.SettingSourceLocal
+	// Permission destinations
+	PermissionDestinationSession         = shared.PermissionDestinationSession
+	PermissionDestinationUserSettings    = shared.PermissionDestinationUserSettings
+	PermissionDestinationProjectSettings = shared.PermissionDestinationProjectSettings
+	PermissionDestinationLocalSettings   = shared.PermissionDestinationLocalSettings
 )
 
 // Option configures Options using the functional options pattern.
@@ -96,10 +129,20 @@ func WithDisallowedTools(tools ...string) Option {
 	}
 }
 
+// SystemPromptPreset represents a preset system prompt configuration.
+type SystemPromptPreset = shared.SystemPromptPreset
+
 // WithSystemPrompt sets the system prompt.
 func WithSystemPrompt(prompt string) Option {
 	return func(o *Options) {
-		o.SystemPrompt = &prompt
+		o.SystemPrompt = prompt
+	}
+}
+
+// WithSystemPromptPreset sets a preset system prompt configuration.
+func WithSystemPromptPreset(preset SystemPromptPreset) Option {
+	return func(o *Options) {
+		o.SystemPrompt = preset
 	}
 }
 
@@ -130,9 +173,25 @@ func WithBetas(betas ...SdkBeta) Option {
 }
 
 // WithMaxThinkingTokens sets the maximum thinking tokens.
+// Deprecated: Use WithThinking instead.
 func WithMaxThinkingTokens(tokens int) Option {
 	return func(o *Options) {
-		o.MaxThinkingTokens = tokens
+		o.MaxThinkingTokens = &tokens
+	}
+}
+
+// WithThinking configures extended thinking behavior.
+// Takes precedence over MaxThinkingTokens when set.
+func WithThinking(config ThinkingConfig) Option {
+	return func(o *Options) {
+		o.Thinking = &config
+	}
+}
+
+// WithEffort sets the effort level for thinking depth.
+func WithEffort(level EffortLevel) Option {
+	return func(o *Options) {
+		o.Effort = &level
 	}
 }
 
@@ -351,6 +410,22 @@ func WithEnvVar(key, value string) Option {
 			o.ExtraEnv = make(map[string]string)
 		}
 		o.ExtraEnv[key] = value
+	}
+}
+
+// WithStderr sets a callback for stderr output from the CLI subprocess.
+// The callback receives each line of stderr output.
+func WithStderr(callback func(string)) Option {
+	return func(o *Options) {
+		o.Stderr = callback
+	}
+}
+
+// WithCanUseTool sets the tool permission callback.
+// Called when the CLI requests permission to use a tool.
+func WithCanUseTool(callback CanUseToolCallback) Option {
+	return func(o *Options) {
+		o.CanUseTool = callback
 	}
 }
 
