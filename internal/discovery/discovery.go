@@ -330,13 +330,24 @@ func buildSettingsValue(options *shared.Options) string {
 		settingsStr := strings.TrimSpace(*options.Settings)
 		if strings.HasPrefix(settingsStr, "{") && strings.HasSuffix(settingsStr, "}") {
 			if err := json.Unmarshal([]byte(settingsStr), &settingsObj); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: Failed to parse settings as JSON: %v\n", err)
+				// Match Python behavior: when JSON parsing fails for brace-delimited
+				// input, retry as file path.
+				fmt.Fprintf(
+					os.Stderr,
+					"Warning: Failed to parse settings as JSON, treating as file path: %s\n",
+					settingsStr,
+				)
+				if data, readErr := os.ReadFile(settingsStr); readErr == nil {
+					_ = json.Unmarshal(data, &settingsObj)
+				}
 			}
 		} else {
 			// It's a file path - read and parse
 			data, err := os.ReadFile(settingsStr)
 			if err == nil {
 				_ = json.Unmarshal(data, &settingsObj)
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: Settings file not found: %s\n", settingsStr)
 			}
 		}
 	}
@@ -390,8 +401,10 @@ func addMCPFlags(cmd []string, options *shared.Options) []string {
 		switch server := cfg.(type) {
 		case *shared.McpStdioServerConfig:
 			payload := map[string]interface{}{
-				"type":    string(server.Type),
 				"command": server.Command,
+			}
+			if server.Type != "" {
+				payload["type"] = string(server.Type)
 			}
 			if len(server.Args) > 0 {
 				payload["args"] = server.Args
@@ -419,9 +432,13 @@ func addMCPFlags(cmd []string, options *shared.Options) []string {
 			}
 			servers[name] = payload
 		case *shared.McpSdkServerConfig:
-			// For SDK servers, pass type only (instance is not serializable)
+			// For SDK servers, pass type and name (instance is not serializable).
+			// Matches Python behavior, which forwards all fields except "instance".
 			payload := map[string]interface{}{
 				"type": string(shared.McpServerTypeSDK),
+			}
+			if server.Name != "" {
+				payload["name"] = server.Name
 			}
 			servers[name] = payload
 		default:

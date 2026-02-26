@@ -213,20 +213,28 @@ func (qi *queryIterator) Next(_ context.Context) (Message, error) {
 	}
 	qi.mu.Unlock()
 
-	// Read from message channels
-	select {
-	case msg, ok := <-qi.msgChan:
-		if !ok {
+	// Read from message channels.
+	// Closed errChan must be ignored; otherwise a closed channel can yield a
+	// spurious nil error and starve msgChan.
+	for {
+		select {
+		case msg, ok := <-qi.msgChan:
+			if !ok {
+				_ = qi.Close()
+				return nil, ErrNoMoreMessages
+			}
+			return msg, nil
+		case err, ok := <-qi.errChan:
+			if !ok {
+				qi.errChan = nil
+				continue
+			}
 			_ = qi.Close()
-			return nil, ErrNoMoreMessages
+			return nil, err
+		case <-qi.ctx.Done():
+			_ = qi.Close()
+			return nil, qi.ctx.Err()
 		}
-		return msg, nil
-	case err := <-qi.errChan:
-		_ = qi.Close()
-		return nil, err
-	case <-qi.ctx.Done():
-		_ = qi.Close()
-		return nil, qi.ctx.Err()
 	}
 }
 
@@ -319,46 +327,52 @@ func (qi *queryStreamIterator) Next(_ context.Context) (Message, error) {
 	}
 	qi.mu.Unlock()
 
-	select {
-	case msg, ok := <-qi.msgChan:
-		if !ok {
-			_ = qi.Close()
-			return nil, ErrNoMoreMessages
-		}
-
-		shouldClose := false
-		qi.mu.Lock()
-		if _, ok := msg.(*ResultMessage); ok {
-			qi.seenResults++
-			qi.firstResultOnce.Do(func() {
-				close(qi.firstResultCh)
-			})
-		}
-		if !qi.hasInputEnder {
-			if qi.sendCompleted && qi.expectedTurns == 0 {
-				shouldClose = true
-			} else if qi.sendCompleted && qi.seenResults >= qi.expectedTurns {
-				shouldClose = true
+	for {
+		select {
+		case msg, ok := <-qi.msgChan:
+			if !ok {
+				_ = qi.Close()
+				return nil, ErrNoMoreMessages
 			}
-		}
-		qi.mu.Unlock()
 
-		if shouldClose {
+			shouldClose := false
+			qi.mu.Lock()
+			if _, ok := msg.(*ResultMessage); ok {
+				qi.seenResults++
+				qi.firstResultOnce.Do(func() {
+					close(qi.firstResultCh)
+				})
+			}
+			if !qi.hasInputEnder {
+				if qi.sendCompleted && qi.expectedTurns == 0 {
+					shouldClose = true
+				} else if qi.sendCompleted && qi.seenResults >= qi.expectedTurns {
+					shouldClose = true
+				}
+			}
+			qi.mu.Unlock()
+
+			if shouldClose {
+				_ = qi.Close()
+			}
+			return msg, nil
+
+		case err, ok := <-qi.errChan:
+			if !ok {
+				qi.errChan = nil
+				continue
+			}
 			_ = qi.Close()
+			return nil, err
+
+		case err := <-qi.sendErr:
+			_ = qi.Close()
+			return nil, err
+
+		case <-qi.ctx.Done():
+			_ = qi.Close()
+			return nil, qi.ctx.Err()
 		}
-		return msg, nil
-
-	case err := <-qi.errChan:
-		_ = qi.Close()
-		return nil, err
-
-	case err := <-qi.sendErr:
-		_ = qi.Close()
-		return nil, err
-
-	case <-qi.ctx.Done():
-		_ = qi.Close()
-		return nil, qi.ctx.Err()
 	}
 }
 

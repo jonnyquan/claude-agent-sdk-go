@@ -219,6 +219,28 @@ func TestQueryWithTransportEndsInputAfterPrompt(t *testing.T) {
 	}
 }
 
+func TestQueryWithTransportIgnoresClosedErrChannel(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	close(transport.errChan)
+	transport.msgChan <- &ResultMessage{Subtype: "success", SessionID: "default"}
+	close(transport.msgChan)
+
+	iter, err := QueryWithTransport(context.Background(), "hello", transport)
+	if err != nil {
+		t.Fatalf("QueryWithTransport returned error: %v", err)
+	}
+
+	msg, err := iter.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next() returned error: %v", err)
+	}
+	if _, ok := msg.(*ResultMessage); !ok {
+		t.Fatalf("expected ResultMessage, got %T", msg)
+	}
+}
+
 func TestReceiveResponseStopsAtResultMessage(t *testing.T) {
 	t.Parallel()
 
@@ -265,6 +287,35 @@ func TestReceiveResponseStopsAtResultMessage(t *testing.T) {
 	_, err = iter.Next(context.Background())
 	if !errors.Is(err, ErrNoMoreMessages) {
 		t.Fatalf("expected ErrNoMoreMessages after result, got %v", err)
+	}
+}
+
+func TestReceiveResponseIgnoresClosedErrChannel(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	close(transport.errChan)
+	assistant := &AssistantMessage{
+		Content: []ContentBlock{&TextBlock{Text: "hello"}},
+		Model:   "claude-sonnet-4-5",
+	}
+	result := &ResultMessage{Subtype: "success", SessionID: "default"}
+	transport.msgChan <- assistant
+	transport.msgChan <- result
+	close(transport.msgChan)
+
+	client := NewClientWithTransport(transport)
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect() returned error: %v", err)
+	}
+
+	iter := client.ReceiveResponse(context.Background())
+	msg, err := iter.Next(context.Background())
+	if err != nil {
+		t.Fatalf("first Next() returned error: %v", err)
+	}
+	if _, ok := msg.(*AssistantMessage); !ok {
+		t.Fatalf("expected AssistantMessage, got %T", msg)
 	}
 }
 
@@ -376,6 +427,32 @@ func TestClientConnectSendsInitialPrompts(t *testing.T) {
 	}
 	if got := sent[0].SessionID; got != "default" {
 		t.Fatalf("expected session_id default, got %q", got)
+	}
+}
+
+func TestClientConnectAllowsReconnectByClosingExistingTransport(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	client := NewClientWithTransport(transport)
+
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("first Connect() returned error: %v", err)
+	}
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("second Connect() returned error: %v", err)
+	}
+
+	transport.mu.Lock()
+	connectCalls := transport.connectCalled
+	closeCalls := transport.closeCalled
+	transport.mu.Unlock()
+
+	if connectCalls != 2 {
+		t.Fatalf("expected Connect() to be called twice on transport, got %d", connectCalls)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("expected existing transport to be closed once before reconnect, got %d", closeCalls)
 	}
 }
 
@@ -514,6 +591,31 @@ func TestQueryStreamWithTransportPreservesSessionIDAndStopsAfterResults(t *testi
 	}
 	if transport.endInputCount() != 1 {
 		t.Fatalf("expected EndInput() once, got %d", transport.endInputCount())
+	}
+}
+
+func TestQueryStreamWithTransportIgnoresClosedErrChannel(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	close(transport.errChan)
+	transport.msgChan <- &ResultMessage{Subtype: "success", SessionID: "default"}
+	close(transport.msgChan)
+
+	input := make(chan StreamMessage)
+	close(input)
+
+	iter, err := QueryStreamWithTransport(context.Background(), input, transport)
+	if err != nil {
+		t.Fatalf("QueryStreamWithTransport() returned error: %v", err)
+	}
+
+	msg, err := iter.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next() returned error: %v", err)
+	}
+	if _, ok := msg.(*ResultMessage); !ok {
+		t.Fatalf("expected ResultMessage, got %T", msg)
 	}
 }
 

@@ -211,8 +211,8 @@ func (t *Transport) Connect(ctx context.Context) error {
 
 	// Always initialize control protocol for streaming mode
 
-	// Create hook processor if hooks are configured
-	if t.options != nil && len(t.options.Hooks) > 0 {
+	// Create hook processor when hooks or can_use_tool callback are configured.
+	if shouldCreateHookProcessor(t.options) {
 		t.hookProcessor = query.NewHookProcessor(t.ctx, t.options)
 	}
 
@@ -613,6 +613,13 @@ func shouldDebugToStderr(options *shared.Options) bool {
 	}
 	_, ok := options.ExtraArgs["debug-to-stderr"]
 	return ok
+}
+
+func shouldCreateHookProcessor(options *shared.Options) bool {
+	if options == nil {
+		return false
+	}
+	return len(options.Hooks) > 0 || options.CanUseTool != nil
 }
 
 // isProcessAlreadyFinishedError checks if an error indicates the process has already terminated.

@@ -573,6 +573,39 @@ func TestHandleJSONRPC_Initialize(t *testing.T) {
 	}
 }
 
+func TestHandleJSONRPC_NotificationsInitialized(t *testing.T) {
+	server := NewServer("test-server", "1.0.0")
+
+	req := JSONRPCRequest{
+		JSONRPC: "2.0",
+		Method:  "notifications/initialized",
+	}
+	reqBytes, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	responseData, err := server.HandleJSONRPC(nil, reqBytes)
+	if err != nil {
+		t.Fatalf("HandleJSONRPC failed: %v", err)
+	}
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(responseData, &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if got, ok := response["jsonrpc"].(string); !ok || got != "2.0" {
+		t.Fatalf("expected jsonrpc=2.0, got %#v", response["jsonrpc"])
+	}
+	if _, hasID := response["id"]; hasID {
+		t.Fatalf("expected notifications/initialized response without id, got %#v", response["id"])
+	}
+	if _, ok := response["result"].(map[string]interface{}); !ok {
+		t.Fatalf("expected object result, got %#v", response["result"])
+	}
+}
+
 // TestHandleJSONRPC_CallTool tests JSON-RPC tools/call method
 func TestHandleJSONRPC_CallTool(t *testing.T) {
 	server := NewServer("test", "1.0.0")

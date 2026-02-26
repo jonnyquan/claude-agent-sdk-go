@@ -18,6 +18,9 @@ type HookProcessor struct {
 	// Map callback IDs to actual callback functions
 	hookCallbacks map[string]shared.HookCallback
 
+	// Precomputed matcher configs to preserve deterministic callback-ID binding.
+	matcherConfigs map[shared.HookEvent][]shared.HookMatcherConfig
+
 	// Tool permission callback
 	canUseTool shared.CanUseToolCallback
 
@@ -36,6 +39,7 @@ func NewHookProcessor(ctx context.Context, options *shared.Options) *HookProcess
 	hp := &HookProcessor{
 		hooks:          make(map[shared.HookEvent][]shared.HookMatcher),
 		hookCallbacks:  make(map[string]shared.HookCallback),
+		matcherConfigs: make(map[shared.HookEvent][]shared.HookMatcherConfig),
 		nextCallbackID: 0,
 		ctx:            ctx,
 	}
@@ -64,12 +68,23 @@ func (hp *HookProcessor) loadHooksFromOptions(options *shared.Options) {
 		for _, matcherAny := range matchers {
 			if matcher, ok := matcherAny.(shared.HookMatcher); ok {
 				hp.hooks[event] = append(hp.hooks[event], matcher)
+				callbackIDs := make([]string, 0, len(matcher.Hooks))
 
 				// Register callbacks
 				for _, callback := range matcher.Hooks {
 					callbackID := hp.generateCallbackID()
 					hp.hookCallbacks[callbackID] = callback
+					callbackIDs = append(callbackIDs, callbackID)
 				}
+
+				cfg := shared.HookMatcherConfig{
+					Matcher:         matcher.Matcher,
+					HookCallbackIDs: callbackIDs,
+				}
+				if matcher.Timeout != nil {
+					cfg.Timeout = matcher.Timeout
+				}
+				hp.matcherConfigs[event] = append(hp.matcherConfigs[event], cfg)
 			}
 		}
 	}
@@ -86,45 +101,18 @@ func (hp *HookProcessor) BuildInitializeConfig() map[string][]shared.HookMatcher
 	hp.mu.RLock()
 	defer hp.mu.RUnlock()
 
-	if len(hp.hooks) == 0 {
+	if len(hp.matcherConfigs) == 0 {
 		return nil
 	}
 
 	config := make(map[string][]shared.HookMatcherConfig)
 
-	for event, matchers := range hp.hooks {
+	for event, matchers := range hp.matcherConfigs {
 		eventKey := string(event)
-		var matcherConfigs []shared.HookMatcherConfig
-
-		for _, matcher := range matchers {
-			var callbackIDs []string
-
-			// Find callback IDs for this matcher
-			for callbackID, callback := range hp.hookCallbacks {
-				// Check if callback belongs to this matcher
-				for _, matcherCallback := range matcher.Hooks {
-					// Compare function pointers (this is a bit hacky but works for now)
-					// In production, we'd need a better way to associate callbacks
-					if fmt.Sprintf("%p", callback) == fmt.Sprintf("%p", matcherCallback) {
-						callbackIDs = append(callbackIDs, callbackID)
-					}
-				}
-			}
-
-			if len(callbackIDs) > 0 {
-				config := shared.HookMatcherConfig{
-					Matcher:         matcher.Matcher,
-					HookCallbackIDs: callbackIDs,
-				}
-				if matcher.Timeout != nil {
-					config.Timeout = matcher.Timeout
-				}
-				matcherConfigs = append(matcherConfigs, config)
-			}
-		}
-
-		if len(matcherConfigs) > 0 {
-			config[eventKey] = matcherConfigs
+		if len(matchers) > 0 {
+			out := make([]shared.HookMatcherConfig, len(matchers))
+			copy(out, matchers)
+			config[eventKey] = out
 		}
 	}
 

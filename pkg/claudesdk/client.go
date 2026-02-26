@@ -243,6 +243,18 @@ func (c *ClientImpl) Connect(ctx context.Context, prompts ...StreamMessage) erro
 	}
 	transportOptions := c.transportOptions()
 
+	// Match Python client behavior: allow repeated connect() calls by
+	// tearing down any existing connection first.
+	if c.connected && c.transport != nil {
+		if err := c.transport.Close(); err != nil {
+			return fmt.Errorf("failed to close existing transport before reconnect: %w", err)
+		}
+		c.connected = false
+		c.transport = nil
+		c.msgChan = nil
+		c.errChan = nil
+	}
+
 	// Use custom transport if provided, otherwise create default
 	if c.customTransport != nil {
 		c.transport = c.customTransport
@@ -609,24 +621,30 @@ func (ci *clientIterator) Next(ctx context.Context) (Message, error) {
 		return nil, ErrNoMoreMessages
 	}
 
-	select {
-	case msg, ok := <-ci.msgChan:
-		if !ok {
-			ci.closed = true
-			return nil, ErrNoMoreMessages
-		}
-		if ci.stopOnResult {
-			if _, ok := msg.(*ResultMessage); ok {
+	for {
+		select {
+		case msg, ok := <-ci.msgChan:
+			if !ok {
 				ci.closed = true
+				return nil, ErrNoMoreMessages
 			}
+			if ci.stopOnResult {
+				if _, ok := msg.(*ResultMessage); ok {
+					ci.closed = true
+				}
+			}
+			return msg, nil
+		case err, ok := <-ci.errChan:
+			if !ok {
+				ci.errChan = nil
+				continue
+			}
+			ci.closed = true
+			return nil, err
+		case <-ctx.Done():
+			ci.closed = true
+			return nil, ctx.Err()
 		}
-		return msg, nil
-	case err := <-ci.errChan:
-		ci.closed = true
-		return nil, err
-	case <-ctx.Done():
-		ci.closed = true
-		return nil, ctx.Err()
 	}
 }
 

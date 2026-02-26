@@ -110,7 +110,9 @@ func (s *Server) HandleJSONRPC(requestID interface{}, requestData []byte) ([]byt
 	case "tools/call":
 		return s.handleCallTool(ctx, request)
 	case "notifications/initialized":
-		return s.successResponse(request.ID, map[string]interface{}{})
+		// Match Python SDK bridge behavior: notifications/initialized
+		// returns a JSON-RPC success payload without an id field.
+		return s.notificationSuccessResponse(map[string]interface{}{})
 	default:
 		return s.errorResponse(request.ID, -32601, fmt.Sprintf("Method '%s' not found", request.Method), nil)
 	}
@@ -175,6 +177,13 @@ func (s *Server) successResponse(id interface{}, result interface{}) ([]byte, er
 		Result:  result,
 	}
 	return json.Marshal(response)
+}
+
+func (s *Server) notificationSuccessResponse(result interface{}) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"result":  result,
+	})
 }
 
 func (s *Server) errorResponse(id interface{}, code int, message string, data interface{}) ([]byte, error) {

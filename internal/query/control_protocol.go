@@ -293,6 +293,10 @@ func (cp *ControlProtocol) processControlRequest(request *shared.ControlRequest)
 
 // handleCanUseTool handles tool permission request.
 func (cp *ControlProtocol) handleCanUseTool(data map[string]any) (map[string]any, error) {
+	if cp.hookProcessor == nil {
+		return nil, fmt.Errorf("canUseTool callback is not provided")
+	}
+
 	// Convert data to CanUseToolRequest
 	request := &shared.CanUseToolRequest{
 		Subtype: shared.ControlSubtypeCanUseTool,
@@ -357,6 +361,10 @@ func (cp *ControlProtocol) handleHookCallback(data map[string]any) (map[string]a
 
 	if toolUseID, ok := data["tool_use_id"].(string); ok {
 		request.ToolUseID = &toolUseID
+	}
+
+	if cp.hookProcessor == nil {
+		return nil, fmt.Errorf("no hook callback found for ID: %s", request.CallbackID)
 	}
 
 	// Process through hook processor

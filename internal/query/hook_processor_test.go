@@ -80,6 +80,40 @@ func TestHookProcessor_BuildInitializeConfig_NilMatcher(t *testing.T) {
 	}
 }
 
+func TestHookProcessor_BuildInitializeConfig_IncludesMatcherWithoutCallbacks(t *testing.T) {
+	ctx := context.Background()
+
+	options := shared.NewOptions()
+	options.Hooks = map[string][]any{
+		string(shared.HookEventPreToolUse): {
+			shared.HookMatcher{
+				Matcher: stringPtr("Bash"),
+				Hooks:   nil,
+			},
+		},
+	}
+
+	hp := NewHookProcessor(ctx, options)
+	config := hp.BuildInitializeConfig()
+	if config == nil {
+		t.Fatal("expected non-nil config")
+	}
+
+	preToolUseConfig, exists := config[string(shared.HookEventPreToolUse)]
+	if !exists {
+		t.Fatal("expected PreToolUse config")
+	}
+	if len(preToolUseConfig) != 1 {
+		t.Fatalf("expected 1 matcher config, got %d", len(preToolUseConfig))
+	}
+	if preToolUseConfig[0].Matcher == nil || *preToolUseConfig[0].Matcher != "Bash" {
+		t.Fatalf("expected matcher 'Bash', got %v", preToolUseConfig[0].Matcher)
+	}
+	if len(preToolUseConfig[0].HookCallbackIDs) != 0 {
+		t.Fatalf("expected no callback IDs, got %v", preToolUseConfig[0].HookCallbackIDs)
+	}
+}
+
 func TestHookProcessor_ProcessHookCallback(t *testing.T) {
 	ctx := context.Background()
 
@@ -312,5 +346,47 @@ func TestHookProcessor_ConvertsPermissionSuggestions(t *testing.T) {
 	}
 	if !sawSuggestions {
 		t.Fatal("expected callback to receive converted suggestions")
+	}
+}
+
+func TestHookProcessor_BuildInitializeConfig_DoesNotCrossBindSameCallbackAcrossMatchers(t *testing.T) {
+	ctx := context.Background()
+
+	sharedCallback := func(input shared.HookInput, toolUseID *string, ctx shared.HookContext) (shared.HookJSONOutput, error) {
+		return shared.NewPreToolUseOutput(shared.PermissionDecisionAllow, "", nil), nil
+	}
+
+	options := shared.NewOptions()
+	options.Hooks = map[string][]any{
+		string(shared.HookEventPreToolUse): {
+			shared.HookMatcher{
+				Matcher: stringPtr("Bash"),
+				Hooks:   []shared.HookCallback{sharedCallback},
+			},
+			shared.HookMatcher{
+				Matcher: stringPtr("Edit"),
+				Hooks:   []shared.HookCallback{sharedCallback},
+			},
+		},
+	}
+
+	hp := NewHookProcessor(ctx, options)
+	config := hp.BuildInitializeConfig()
+	if config == nil {
+		t.Fatal("expected initialize config")
+	}
+
+	preToolUse := config[string(shared.HookEventPreToolUse)]
+	if len(preToolUse) != 2 {
+		t.Fatalf("expected 2 matcher configs, got %d", len(preToolUse))
+	}
+	if len(preToolUse[0].HookCallbackIDs) != 1 {
+		t.Fatalf("expected first matcher to have 1 callback id, got %d", len(preToolUse[0].HookCallbackIDs))
+	}
+	if len(preToolUse[1].HookCallbackIDs) != 1 {
+		t.Fatalf("expected second matcher to have 1 callback id, got %d", len(preToolUse[1].HookCallbackIDs))
+	}
+	if preToolUse[0].HookCallbackIDs[0] == preToolUse[1].HookCallbackIDs[0] {
+		t.Fatalf("expected distinct callback IDs per matcher, got shared id %q", preToolUse[0].HookCallbackIDs[0])
 	}
 }

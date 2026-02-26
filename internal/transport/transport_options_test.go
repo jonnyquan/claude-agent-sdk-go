@@ -95,3 +95,54 @@ func TestShouldPipeStderr(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldCreateHookProcessor(t *testing.T) {
+	t.Parallel()
+
+	allow := func(string, map[string]any, shared.ToolPermissionContext) (shared.PermissionResult, error) {
+		return shared.NewPermissionAllow(nil, nil), nil
+	}
+
+	tests := []struct {
+		name    string
+		options *shared.Options
+		want    bool
+	}{
+		{
+			name:    "nil options",
+			options: nil,
+			want:    false,
+		},
+		{
+			name:    "no hooks no can_use_tool",
+			options: &shared.Options{},
+			want:    false,
+		},
+		{
+			name: "hooks configured",
+			options: &shared.Options{
+				Hooks: map[string][]any{
+					"PreToolUse": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "can_use_tool configured",
+			options: &shared.Options{
+				CanUseTool: allow,
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldCreateHookProcessor(tc.options); got != tc.want {
+				t.Fatalf("shouldCreateHookProcessor()=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
