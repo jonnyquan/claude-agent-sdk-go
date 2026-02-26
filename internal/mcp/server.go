@@ -16,6 +16,7 @@ type ToolDefinition struct {
 	Name        string
 	Description string
 	InputSchema interface{} // Can be map[string]Type or map[string]interface{} (JSON Schema)
+	Annotations map[string]interface{}
 	Handler     ToolHandler
 }
 
@@ -67,6 +68,7 @@ func (s *Server) ListTools() []Tool {
 			Name:        toolDef.Name,
 			Description: toolDef.Description,
 			InputSchema: schema,
+			Annotations: toolDef.Annotations,
 		})
 	}
 	return result
@@ -93,14 +95,16 @@ func (s *Server) HandleJSONRPC(requestID interface{}, requestData []byte) ([]byt
 	if err := json.Unmarshal(requestData, &request); err != nil {
 		return s.errorResponse(nil, -32700, "Parse error", err)
 	}
-	
+
 	// Use the parsed request ID, not the parameter
 	// (The parameter is for interface compatibility but not used in SDK servers)
 
 	// Create context for the request if not provided
 	ctx := context.Background()
-	
+
 	switch request.Method {
+	case "initialize":
+		return s.handleInitialize(request)
 	case "tools/list":
 		return s.handleListTools(request)
 	case "tools/call":
@@ -110,6 +114,26 @@ func (s *Server) HandleJSONRPC(requestID interface{}, requestData []byte) ([]byt
 	default:
 		return s.errorResponse(request.ID, -32601, fmt.Sprintf("Method '%s' not found", request.Method), nil)
 	}
+}
+
+func (s *Server) handleInitialize(request JSONRPCRequest) ([]byte, error) {
+	version := s.version
+	if version == "" {
+		version = "1.0.0"
+	}
+
+	result := map[string]interface{}{
+		"protocolVersion": "2024-11-05",
+		"capabilities": map[string]interface{}{
+			"tools": map[string]interface{}{},
+		},
+		"serverInfo": map[string]interface{}{
+			"name":    s.name,
+			"version": version,
+		},
+	}
+
+	return s.successResponse(request.ID, result)
 }
 
 func (s *Server) handleListTools(request JSONRPCRequest) ([]byte, error) {
@@ -195,12 +219,12 @@ func (s *Server) buildJSONSchema(schema interface{}) map[string]interface{} {
 type Type interface{}
 
 var (
-	TypeString  Type = "string"
-	TypeInt     Type = "integer"
-	TypeFloat   Type = "number"
-	TypeBool    Type = "boolean"
-	TypeObject  Type = "object"
-	TypeArray   Type = "array"
+	TypeString Type = "string"
+	TypeInt    Type = "integer"
+	TypeFloat  Type = "number"
+	TypeBool   Type = "boolean"
+	TypeObject Type = "object"
+	TypeArray  Type = "array"
 )
 
 func (s *Server) convertTypedMapToJSON(typeMap map[string]Type) map[string]interface{} {
@@ -209,7 +233,7 @@ func (s *Server) convertTypedMapToJSON(typeMap map[string]Type) map[string]inter
 
 	for name, typ := range typeMap {
 		required = append(required, name)
-		
+
 		switch typ {
 		case TypeString, "string":
 			properties[name] = map[string]interface{}{"type": "string"}
@@ -243,7 +267,7 @@ func (s *Server) convertSimpleSchemaToJSON(schema map[string]interface{}) map[st
 
 	for name, value := range schema {
 		required = append(required, name)
-		
+
 		// Check if it's a type string
 		if typeStr, ok := value.(string); ok {
 			properties[name] = map[string]interface{}{"type": typeStr}

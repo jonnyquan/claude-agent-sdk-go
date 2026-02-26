@@ -172,16 +172,15 @@ func (c *ClientImpl) validateOptions() error {
 		return nil // Nil options are acceptable (use defaults)
 	}
 
+	if err := c.options.Validate(); err != nil {
+		return err
+	}
+
 	// Validate working directory
 	if c.options.Cwd != nil {
 		if _, err := os.Stat(*c.options.Cwd); os.IsNotExist(err) {
 			return fmt.Errorf("working directory does not exist: %s", *c.options.Cwd)
 		}
-	}
-
-	// Validate max turns
-	if c.options.MaxTurns < 0 {
-		return fmt.Errorf("max_turns must be non-negative, got: %d", c.options.MaxTurns)
 	}
 
 	// Validate permission mode
@@ -197,11 +196,34 @@ func (c *ClientImpl) validateOptions() error {
 		}
 	}
 
+	// Match Python SDK behavior: these two are mutually exclusive.
+	if c.options.CanUseTool != nil && c.options.PermissionPromptToolName != nil {
+		return fmt.Errorf(
+			"can_use_tool callback cannot be used with permission_prompt_tool_name. Please use one or the other",
+		)
+	}
+
 	return nil
 }
 
+// transportOptions returns options prepared for transport startup.
+// Match Python SDK behavior: when can_use_tool is set, automatically use stdio prompt tool.
+func (c *ClientImpl) transportOptions() *Options {
+	if c.options == nil {
+		return nil
+	}
+	if c.options.CanUseTool == nil {
+		return c.options
+	}
+
+	cloned := *c.options
+	stdio := "stdio"
+	cloned.PermissionPromptToolName = &stdio
+	return &cloned
+}
+
 // Connect establishes a connection to the Claude Code CLI.
-func (c *ClientImpl) Connect(ctx context.Context, _ ...StreamMessage) error {
+func (c *ClientImpl) Connect(ctx context.Context, prompts ...StreamMessage) error {
 	// Check context before acquiring lock
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -219,6 +241,7 @@ func (c *ClientImpl) Connect(ctx context.Context, _ ...StreamMessage) error {
 	if err := c.validateOptions(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
+	transportOptions := c.transportOptions()
 
 	// Use custom transport if provided, otherwise create default
 	if c.customTransport != nil {
@@ -236,7 +259,7 @@ func (c *ClientImpl) Connect(ctx context.Context, _ ...StreamMessage) error {
 		}
 
 		// Create subprocess transport (always uses streaming mode)
-		c.transport = transport.New(cliPath, c.options, "sdk-go-client", Version)
+		c.transport = transport.New(cliPath, transportOptions, "sdk-go-client", Version)
 	}
 
 	// Connect the transport
@@ -248,6 +271,19 @@ func (c *ClientImpl) Connect(ctx context.Context, _ ...StreamMessage) error {
 	c.msgChan, c.errChan = c.transport.ReceiveMessages(ctx)
 
 	c.connected = true
+
+	// Optional initial prompts, sent after connection is ready.
+	for _, msg := range prompts {
+		if err := c.transport.SendMessage(ctx, msg); err != nil {
+			_ = c.transport.Close()
+			c.connected = false
+			c.transport = nil
+			c.msgChan = nil
+			c.errChan = nil
+			return fmt.Errorf("failed to send initial prompt: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -336,6 +372,10 @@ func (c *ClientImpl) queryWithSession(ctx context.Context, prompt string, sessio
 
 // QueryStream sends a stream of messages.
 func (c *ClientImpl) QueryStream(ctx context.Context, messages <-chan StreamMessage) error {
+	if messages == nil {
+		return fmt.Errorf("messages stream is required")
+	}
+
 	// Check connection status with read lock
 	c.mu.RLock()
 	connected := c.connected
@@ -346,25 +386,22 @@ func (c *ClientImpl) QueryStream(ctx context.Context, messages <-chan StreamMess
 		return fmt.Errorf("client not connected")
 	}
 
-	// Send messages from channel in a goroutine
-	go func() {
-		for {
-			select {
-			case msg, ok := <-messages:
-				if !ok {
-					return // Channel closed
-				}
-				if err := transport.SendMessage(ctx, msg); err != nil {
-					// Log error but continue processing
-					return
-				}
-			case <-ctx.Done():
-				return
+	for {
+		select {
+		case msg, ok := <-messages:
+			if !ok {
+				return nil
 			}
+			if msg.SessionID == "" {
+				msg.SessionID = defaultSessionID
+			}
+			if err := transport.SendMessage(ctx, msg); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-	}()
-
-	return nil
+	}
 }
 
 // ReceiveMessages returns a channel of incoming messages.
@@ -376,10 +413,18 @@ func (c *ClientImpl) ReceiveMessages(_ context.Context) <-chan Message {
 	c.mu.RUnlock()
 
 	if !connected || msgChan == nil {
-		// Return closed channel if not connected
-		closedChan := make(chan Message)
-		close(closedChan)
-		return closedChan
+		// Surface connection misuse explicitly instead of silently returning no messages.
+		errorChan := make(chan Message, 1)
+		errorChan <- &SystemMessage{
+			Subtype: "error",
+			Data: map[string]any{
+				"type":    MessageTypeSystem,
+				"subtype": "error",
+				"error":   "not connected. call connect() first",
+			},
+		}
+		close(errorChan)
+		return errorChan
 	}
 
 	// Return the transport's message channel directly
@@ -396,14 +441,38 @@ func (c *ClientImpl) ReceiveResponse(_ context.Context) MessageIterator {
 	c.mu.RUnlock()
 
 	if !connected || msgChan == nil {
-		return nil
+		return &clientErrorIterator{
+			err: fmt.Errorf("not connected. call connect() first"),
+		}
 	}
 
 	// Create a simple iterator over the message channel
 	return &clientIterator{
-		msgChan: msgChan,
-		errChan: errChan,
+		msgChan:      msgChan,
+		errChan:      errChan,
+		stopOnResult: true,
 	}
+}
+
+type clientErrorIterator struct {
+	err      error
+	consumed bool
+}
+
+func (it *clientErrorIterator) Next(context.Context) (Message, error) {
+	if it.consumed {
+		return nil, ErrNoMoreMessages
+	}
+	it.consumed = true
+	if it.err != nil {
+		return nil, it.err
+	}
+	return nil, ErrNoMoreMessages
+}
+
+func (it *clientErrorIterator) Close() error {
+	it.consumed = true
+	return nil
 }
 
 // Interrupt sends an interrupt signal to stop the current operation.
@@ -529,9 +598,10 @@ func (c *ClientImpl) GetServerInfo() map[string]any {
 
 // clientIterator implements MessageIterator for client message reception
 type clientIterator struct {
-	msgChan <-chan Message
-	errChan <-chan error
-	closed  bool
+	msgChan      <-chan Message
+	errChan      <-chan error
+	closed       bool
+	stopOnResult bool
 }
 
 func (ci *clientIterator) Next(ctx context.Context) (Message, error) {
@@ -544,6 +614,11 @@ func (ci *clientIterator) Next(ctx context.Context) (Message, error) {
 		if !ok {
 			ci.closed = true
 			return nil, ErrNoMoreMessages
+		}
+		if ci.stopOnResult {
+			if _, ok := msg.(*ResultMessage); ok {
+				ci.closed = true
+			}
 		}
 		return msg, nil
 	case err := <-ci.errChan:

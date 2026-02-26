@@ -78,6 +78,60 @@ func TestParseValidMessages(t *testing.T) {
 	}
 }
 
+func TestParseUserMessagePreservesTopLevelMetadata(t *testing.T) {
+	parser := setupParserTest(t)
+
+	msg, err := parser.ParseMessage(map[string]any{
+		"type":               "user",
+		"parent_tool_use_id": "tool_123",
+		"tool_use_result": map[string]any{
+			"status": "ok",
+		},
+		"message": map[string]any{
+			"content": "hello",
+		},
+	})
+	assertNoParseError(t, err)
+
+	userMsg, ok := msg.(*shared.UserMessage)
+	if !ok {
+		t.Fatalf("Expected UserMessage, got %T", msg)
+	}
+	if userMsg.ParentToolUseID == nil || *userMsg.ParentToolUseID != "tool_123" {
+		t.Fatalf("expected parent_tool_use_id to be preserved, got %v", userMsg.ParentToolUseID)
+	}
+	if userMsg.ToolUseResult == nil {
+		t.Fatal("expected tool_use_result to be preserved")
+	}
+	if got, ok := userMsg.ToolUseResult["status"].(string); !ok || got != "ok" {
+		t.Fatalf("unexpected tool_use_result status: %v", userMsg.ToolUseResult["status"])
+	}
+}
+
+func TestParseAssistantMessagePreservesParentToolUseID(t *testing.T) {
+	parser := setupParserTest(t)
+
+	msg, err := parser.ParseMessage(map[string]any{
+		"type":               "assistant",
+		"parent_tool_use_id": "tool_456",
+		"message": map[string]any{
+			"content": []any{
+				map[string]any{"type": "text", "text": "hi"},
+			},
+			"model": "claude-sonnet-4-5",
+		},
+	})
+	assertNoParseError(t, err)
+
+	assistantMsg, ok := msg.(*shared.AssistantMessage)
+	if !ok {
+		t.Fatalf("Expected AssistantMessage, got %T", msg)
+	}
+	if assistantMsg.ParentToolUseID == nil || *assistantMsg.ParentToolUseID != "tool_456" {
+		t.Fatalf("expected parent_tool_use_id to be preserved, got %v", assistantMsg.ParentToolUseID)
+	}
+}
+
 // TestParseErrors tests various error conditions
 func TestParseErrors(t *testing.T) {
 	tests := []struct {

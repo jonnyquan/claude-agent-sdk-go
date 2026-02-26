@@ -14,19 +14,19 @@ import (
 type HookProcessor struct {
 	// Hook callbacks indexed by event type
 	hooks map[shared.HookEvent][]shared.HookMatcher
-	
+
 	// Map callback IDs to actual callback functions
 	hookCallbacks map[string]shared.HookCallback
-	
+
 	// Tool permission callback
 	canUseTool shared.CanUseToolCallback
-	
+
 	// Counter for generating callback IDs
 	nextCallbackID int64
-	
+
 	// Mutex for thread-safe access
 	mu sync.RWMutex
-	
+
 	// Context for cancellation
 	ctx context.Context
 }
@@ -39,7 +39,7 @@ func NewHookProcessor(ctx context.Context, options *shared.Options) *HookProcess
 		nextCallbackID: 0,
 		ctx:            ctx,
 	}
-	
+
 	// Load hooks from options
 	if options != nil && len(options.Hooks) > 0 {
 		hp.loadHooksFromOptions(options)
@@ -57,14 +57,14 @@ func NewHookProcessor(ctx context.Context, options *shared.Options) *HookProcess
 func (hp *HookProcessor) loadHooksFromOptions(options *shared.Options) {
 	hp.mu.Lock()
 	defer hp.mu.Unlock()
-	
+
 	for eventKey, matchers := range options.Hooks {
 		event := shared.HookEvent(eventKey)
-		
+
 		for _, matcherAny := range matchers {
 			if matcher, ok := matcherAny.(shared.HookMatcher); ok {
 				hp.hooks[event] = append(hp.hooks[event], matcher)
-				
+
 				// Register callbacks
 				for _, callback := range matcher.Hooks {
 					callbackID := hp.generateCallbackID()
@@ -85,20 +85,20 @@ func (hp *HookProcessor) generateCallbackID() string {
 func (hp *HookProcessor) BuildInitializeConfig() map[string][]shared.HookMatcherConfig {
 	hp.mu.RLock()
 	defer hp.mu.RUnlock()
-	
+
 	if len(hp.hooks) == 0 {
 		return nil
 	}
-	
+
 	config := make(map[string][]shared.HookMatcherConfig)
-	
+
 	for event, matchers := range hp.hooks {
 		eventKey := string(event)
 		var matcherConfigs []shared.HookMatcherConfig
-		
+
 		for _, matcher := range matchers {
 			var callbackIDs []string
-			
+
 			// Find callback IDs for this matcher
 			for callbackID, callback := range hp.hookCallbacks {
 				// Check if callback belongs to this matcher
@@ -110,14 +110,10 @@ func (hp *HookProcessor) BuildInitializeConfig() map[string][]shared.HookMatcher
 					}
 				}
 			}
-			
+
 			if len(callbackIDs) > 0 {
-				matcherStr := ""
-				if matcher.Matcher != nil {
-					matcherStr = *matcher.Matcher
-				}
 				config := shared.HookMatcherConfig{
-					Matcher:         matcherStr,
+					Matcher:         matcher.Matcher,
 					HookCallbackIDs: callbackIDs,
 				}
 				if matcher.Timeout != nil {
@@ -126,12 +122,12 @@ func (hp *HookProcessor) BuildInitializeConfig() map[string][]shared.HookMatcher
 				matcherConfigs = append(matcherConfigs, config)
 			}
 		}
-		
+
 		if len(matcherConfigs) > 0 {
 			config[eventKey] = matcherConfigs
 		}
 	}
-	
+
 	return config
 }
 
@@ -142,23 +138,23 @@ func (hp *HookProcessor) ProcessHookCallback(
 	hp.mu.RLock()
 	callback, exists := hp.hookCallbacks[request.CallbackID]
 	hp.mu.RUnlock()
-	
+
 	if !exists {
 		return nil, fmt.Errorf("no hook callback found for ID: %s", request.CallbackID)
 	}
-	
+
 	// Prepare hook context
 	hookCtx := shared.HookContext{
 		Context: hp.ctx,
 		Signal:  nil, // TODO: Add abort signal support
 	}
-	
+
 	// Call the user's hook callback
 	output, err := callback(request.Input, request.ToolUseID, hookCtx)
 	if err != nil {
 		return nil, fmt.Errorf("hook callback error: %w", err)
 	}
-	
+
 	return output, nil
 }
 
@@ -169,23 +165,23 @@ func (hp *HookProcessor) ProcessCanUseTool(
 	if hp.canUseTool == nil {
 		return nil, fmt.Errorf("canUseTool callback is not provided")
 	}
-	
+
 	// Prepare permission context
 	permCtx := shared.ToolPermissionContext{
 		Context:     hp.ctx,
 		Signal:      nil, // TODO: Add abort signal support
 		Suggestions: convertPermissionSuggestions(request.PermissionSuggestions),
 	}
-	
+
 	// Call the permission callback
 	result, err := hp.canUseTool(request.ToolName, request.Input, permCtx)
 	if err != nil {
 		return nil, fmt.Errorf("permission callback error: %w", err)
 	}
-	
+
 	// Convert result to response format
 	response := &shared.PermissionResponse{}
-	
+
 	switch r := result.(type) {
 	case *shared.PermissionResultAllow:
 		response.Behavior = "allow"
@@ -198,16 +194,16 @@ func (hp *HookProcessor) ProcessCanUseTool(
 		if r.UpdatedPermissions != nil {
 			response.UpdatedPermissions = convertPermissionUpdates(r.UpdatedPermissions)
 		}
-		
+
 	case *shared.PermissionResultDeny:
 		response.Behavior = "deny"
 		response.Message = r.Message
 		response.Interrupt = r.Interrupt
-		
+
 	default:
 		return nil, fmt.Errorf("invalid permission result type: %T", result)
 	}
-	
+
 	return response, nil
 }
 
@@ -221,8 +217,79 @@ func (hp *HookProcessor) SetCanUseToolCallback(callback shared.CanUseToolCallbac
 // Helper functions
 
 func convertPermissionSuggestions(suggestions []any) []shared.PermissionUpdate {
-	// TODO: Implement proper conversion from CLI suggestions
-	return []shared.PermissionUpdate{}
+	if len(suggestions) == 0 {
+		return nil
+	}
+
+	updates := make([]shared.PermissionUpdate, 0, len(suggestions))
+	for _, raw := range suggestions {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		updateType, ok := item["type"].(string)
+		if !ok || updateType == "" {
+			continue
+		}
+
+		update := shared.PermissionUpdate{
+			Type: shared.PermissionUpdateType(updateType),
+		}
+
+		if dest, ok := item["destination"].(string); ok && dest != "" {
+			d := shared.PermissionDestination(dest)
+			update.Destination = &d
+		}
+		if behavior, ok := item["behavior"].(string); ok && behavior != "" {
+			b := behavior
+			update.Behavior = &b
+		}
+		if mode, ok := item["mode"].(string); ok && mode != "" {
+			m := mode
+			update.Mode = &m
+		}
+
+		if rawDirs, ok := item["directories"].([]any); ok && len(rawDirs) > 0 {
+			dirs := make([]string, 0, len(rawDirs))
+			for _, dirRaw := range rawDirs {
+				if dir, ok := dirRaw.(string); ok && dir != "" {
+					dirs = append(dirs, dir)
+				}
+			}
+			if len(dirs) > 0 {
+				update.Directories = dirs
+			}
+		}
+
+		if rawRules, ok := item["rules"].([]any); ok && len(rawRules) > 0 {
+			rules := make([]shared.PermissionRule, 0, len(rawRules))
+			for _, rawRule := range rawRules {
+				ruleMap, ok := rawRule.(map[string]any)
+				if !ok {
+					continue
+				}
+				toolName, ok := ruleMap["toolName"].(string)
+				if !ok || toolName == "" {
+					continue
+				}
+
+				rule := shared.PermissionRule{ToolName: toolName}
+				if ruleContent, ok := ruleMap["ruleContent"].(string); ok {
+					rc := ruleContent
+					rule.RuleContent = &rc
+				}
+				rules = append(rules, rule)
+			}
+			if len(rules) > 0 {
+				update.Rules = rules
+			}
+		}
+
+		updates = append(updates, update)
+	}
+
+	return updates
 }
 
 func convertPermissionUpdates(updates []shared.PermissionUpdate) []any {

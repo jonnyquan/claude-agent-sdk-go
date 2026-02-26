@@ -160,6 +160,13 @@ func WithModel(model string) Option {
 	}
 }
 
+// WithFallbackModel sets the fallback model to use if the primary model is unavailable.
+func WithFallbackModel(model string) Option {
+	return func(o *Options) {
+		o.FallbackModel = &model
+	}
+}
+
 // WithBetas enables Anthropic API beta features.
 // See https://docs.anthropic.com/en/api/beta-headers for available betas.
 //
@@ -328,6 +335,20 @@ func WithMaxBufferSize(size int) Option {
 func WithMcpServers(servers map[string]McpServerConfig) Option {
 	return func(o *Options) {
 		o.McpServers = servers
+	}
+}
+
+// WithMcpConfig sets raw MCP config as a file path or JSON string.
+// This mirrors Python SDK support where mcp_servers can be dict or string/path.
+// When set, this takes precedence over WithMcpServers.
+func WithMcpConfig(config string) Option {
+	return func(o *Options) {
+		if config == "" {
+			o.McpConfig = nil
+			return
+		}
+		cfg := config
+		o.McpConfig = &cfg
 	}
 }
 

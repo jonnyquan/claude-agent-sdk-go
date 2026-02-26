@@ -47,7 +47,7 @@ type ToolResultBlock = claudesdk.ToolResultBlock
 // Hook types
 // Deprecated: Use claudesdk types instead.
 type HookInput = claudesdk.HookInput
-type HookContext = claudesdk.HookContext  
+type HookContext = claudesdk.HookContext
 type HookJSONOutput = claudesdk.HookJSONOutput
 type HookMatcher = claudesdk.HookMatcher
 type HookEvent = claudesdk.HookEvent
@@ -93,12 +93,16 @@ const (
 	PluginTypeLocal = claudesdk.PluginTypeLocal
 
 	// Hook events
-	HookEventPreToolUse       = claudesdk.HookEventPreToolUse
-	HookEventPostToolUse      = claudesdk.HookEventPostToolUse
-	HookEventUserPromptSubmit = claudesdk.HookEventUserPromptSubmit
-	HookEventStop             = claudesdk.HookEventStop
-	HookEventSubagentStop     = claudesdk.HookEventSubagentStop
-	HookEventPreCompact       = claudesdk.HookEventPreCompact
+	HookEventPreToolUse         = claudesdk.HookEventPreToolUse
+	HookEventPostToolUse        = claudesdk.HookEventPostToolUse
+	HookEventPostToolUseFailure = claudesdk.HookEventPostToolUseFailure
+	HookEventUserPromptSubmit   = claudesdk.HookEventUserPromptSubmit
+	HookEventStop               = claudesdk.HookEventStop
+	HookEventSubagentStop       = claudesdk.HookEventSubagentStop
+	HookEventPreCompact         = claudesdk.HookEventPreCompact
+	HookEventNotification       = claudesdk.HookEventNotification
+	HookEventSubagentStart      = claudesdk.HookEventSubagentStart
+	HookEventPermissionRequest  = claudesdk.HookEventPermissionRequest
 
 	// Permission decisions
 	PermissionDecisionAllow = claudesdk.PermissionDecisionAllow
@@ -108,6 +112,7 @@ const (
 	// Permission modes
 	PermissionModeDefault           = claudesdk.PermissionModeDefault
 	PermissionModeAcceptEdits       = claudesdk.PermissionModeAcceptEdits
+	PermissionModePlan              = claudesdk.PermissionModePlan
 	PermissionModeBypassPermissions = claudesdk.PermissionModeBypassPermissions
 
 	// Beta features
@@ -128,6 +133,10 @@ var WithClient = claudesdk.WithClient
 // Deprecated: Use claudesdk.Query instead.
 var Query = claudesdk.Query
 
+// QueryStream performs a one-shot streaming query with message stream input.
+// Deprecated: Use claudesdk.QueryStream instead.
+var QueryStream = claudesdk.QueryStream
+
 // Re-export option constructors
 
 // WithSystemPrompt sets the system prompt for the conversation.
@@ -142,9 +151,17 @@ var WithCwd = claudesdk.WithCwd
 // Deprecated: Use claudesdk.WithModel instead.
 var WithModel = claudesdk.WithModel
 
+// WithFallbackModel sets the fallback model to use for the conversation.
+// Deprecated: Use claudesdk.WithFallbackModel instead.
+var WithFallbackModel = claudesdk.WithFallbackModel
+
 // WithMcpServers connects to MCP (Model Context Protocol) servers.
 // Deprecated: Use claudesdk.WithMcpServers instead.
 var WithMcpServers = claudesdk.WithMcpServers
+
+// WithMcpConfig sets raw MCP config as file path or JSON string.
+// Deprecated: Use claudesdk.WithMcpConfig instead.
+var WithMcpConfig = claudesdk.WithMcpConfig
 
 // Additional option functions
 
@@ -222,6 +239,10 @@ var NewImageContent = claudesdk.NewImageContent
 // Deprecated: Use claudesdk.Tool instead.
 var Tool = claudesdk.Tool
 
+// ToolWithAnnotations creates a tool definition with MCP annotations.
+// Deprecated: Use claudesdk.ToolWithAnnotations instead.
+var ToolWithAnnotations = claudesdk.ToolWithAnnotations
+
 // Hook utility functions
 // Deprecated: Use claudesdk functions instead.
 var NewPreToolUseOutput = claudesdk.NewPreToolUseOutput
@@ -233,7 +254,7 @@ var NewStopOutput = claudesdk.NewStopOutput
 var WithHook = claudesdk.WithHook
 var WithHooks = claudesdk.WithHooks
 
-// Additional variables  
+// Additional variables
 
 // ErrNoMoreMessages indicates the message iterator has no more messages.
 // Deprecated: Use claudesdk.ErrNoMoreMessages instead.

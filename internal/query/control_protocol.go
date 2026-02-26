@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -55,7 +57,7 @@ func NewControlProtocol(
 
 	return &ControlProtocol{
 		hookProcessor:    hookProcessor,
-		sdkMCPServers:   sdkMCPServers,
+		sdkMCPServers:    sdkMCPServers,
 		pendingResponses: make(map[string]*pendingControlResponse),
 		ctx:              cpCtx,
 		cancel:           cancel,
@@ -89,7 +91,7 @@ func (cp *ControlProtocol) Initialize(agents map[string]map[string]any) (map[str
 	}
 
 	// Send and wait for response
-	response, err := cp.sendControlRequest(request, 60*time.Second)
+	response, err := cp.sendControlRequest(request, initializeTimeout())
 	if err != nil {
 		return nil, fmt.Errorf("initialize request failed: %w", err)
 	}
@@ -99,6 +101,26 @@ func (cp *ControlProtocol) Initialize(agents map[string]map[string]any) (map[str
 	cp.initializedMu.Unlock()
 
 	return response, nil
+}
+
+func initializeTimeout() time.Duration {
+	const minTimeout = 60 * time.Second
+	raw := os.Getenv("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT")
+	if raw == "" {
+		return minTimeout
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil {
+		return minTimeout
+	}
+	if ms <= 0 {
+		return minTimeout
+	}
+	timeout := time.Duration(ms) * time.Millisecond
+	if timeout < minTimeout {
+		return minTimeout
+	}
+	return timeout
 }
 
 // GetMCPStatus queries the MCP status from CLI.
@@ -154,13 +176,13 @@ func (cp *ControlProtocol) HandleIncomingMessage(msgType string, data []byte) er
 	switch msgType {
 	case shared.ControlTypeResponse:
 		return cp.handleControlResponse(data)
-		
+
 	case shared.ControlTypeRequest:
 		return cp.handleControlRequest(data)
-		
+
 	case shared.ControlTypeCancelRequest:
 		return cp.handleControlCancel(data)
-		
+
 	default:
 		return fmt.Errorf("unknown control message type: %s", msgType)
 	}
@@ -172,30 +194,30 @@ func (cp *ControlProtocol) handleControlResponse(data []byte) error {
 	if err := json.Unmarshal(data, &response); err != nil {
 		return fmt.Errorf("failed to unmarshal control response: %w", err)
 	}
-	
+
 	requestID := response.Response.RequestID
-	
+
 	cp.responseMu.RLock()
 	pending, exists := cp.pendingResponses[requestID]
 	cp.responseMu.RUnlock()
-	
+
 	if !exists {
 		// Response for unknown request, ignore
 		return nil
 	}
-	
+
 	// Send response to waiting goroutine
 	if response.Response.Subtype == shared.ControlSubtypeError {
 		pending.err <- fmt.Errorf("control request error: %s", response.Response.Error)
 	} else {
 		pending.ch <- &response.Response
 	}
-	
+
 	// Clean up
 	cp.responseMu.Lock()
 	delete(cp.pendingResponses, requestID)
 	cp.responseMu.Unlock()
-	
+
 	return nil
 }
 
@@ -205,10 +227,10 @@ func (cp *ControlProtocol) handleControlRequest(data []byte) error {
 	if err := json.Unmarshal(data, &request); err != nil {
 		return fmt.Errorf("failed to unmarshal control request: %w", err)
 	}
-	
+
 	// Process in goroutine to avoid blocking message reader
 	go cp.processControlRequest(&request)
-	
+
 	return nil
 }
 
@@ -216,21 +238,21 @@ func (cp *ControlProtocol) handleControlRequest(data []byte) error {
 func (cp *ControlProtocol) processControlRequest(request *shared.ControlRequest) {
 	var responseData map[string]any
 	var err error
-	
+
 	switch request.Request.Subtype {
 	case shared.ControlSubtypeCanUseTool:
 		responseData, err = cp.handleCanUseTool(request.Request.Data)
-		
+
 	case shared.ControlSubtypeHookCallback:
 		responseData, err = cp.handleHookCallback(request.Request.Data)
-		
+
 	case shared.ControlSubtypeMCPMessage:
 		responseData, err = cp.handleMCPMessage(request.Request.Data)
-		
+
 	default:
 		err = fmt.Errorf("unsupported control request subtype: %s", request.Request.Subtype)
 	}
-	
+
 	// Build and send response
 	var response shared.ControlResponse
 	if err != nil {
@@ -252,17 +274,17 @@ func (cp *ControlProtocol) processControlRequest(request *shared.ControlRequest)
 			},
 		}
 	}
-	
+
 	// Send response
 	responseBytes, marshalErr := json.Marshal(response)
 	if marshalErr != nil {
 		// Log error but can't do much else
 		return
 	}
-	
+
 	// Add newline for line-delimited JSON
 	responseBytes = append(responseBytes, '\n')
-	
+
 	if writeErr := cp.writeFn(responseBytes); writeErr != nil {
 		// Log error but can't do much else
 		return
@@ -275,46 +297,46 @@ func (cp *ControlProtocol) handleCanUseTool(data map[string]any) (map[string]any
 	request := &shared.CanUseToolRequest{
 		Subtype: shared.ControlSubtypeCanUseTool,
 	}
-	
+
 	if toolName, ok := data["tool_name"].(string); ok {
 		request.ToolName = toolName
 	}
-	
+
 	if input, ok := data["input"].(map[string]any); ok {
 		request.Input = input
 	}
-	
+
 	if suggestions, ok := data["permission_suggestions"].([]any); ok {
 		request.PermissionSuggestions = suggestions
 	}
-	
+
 	// Process through hook processor
 	response, err := cp.hookProcessor.ProcessCanUseTool(request)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Convert to map
 	result := map[string]any{
 		"behavior": response.Behavior,
 	}
-	
+
 	if response.UpdatedInput != nil {
 		result["updatedInput"] = response.UpdatedInput
 	}
-	
+
 	if response.UpdatedPermissions != nil {
 		result["updatedPermissions"] = response.UpdatedPermissions
 	}
-	
+
 	if response.Message != "" {
 		result["message"] = response.Message
 	}
-	
+
 	if response.Interrupt {
 		result["interrupt"] = response.Interrupt
 	}
-	
+
 	return result, nil
 }
 
@@ -324,25 +346,25 @@ func (cp *ControlProtocol) handleHookCallback(data map[string]any) (map[string]a
 	request := &shared.HookCallbackRequest{
 		Subtype: shared.ControlSubtypeHookCallback,
 	}
-	
+
 	if callbackID, ok := data["callback_id"].(string); ok {
 		request.CallbackID = callbackID
 	}
-	
+
 	if input, ok := data["input"].(map[string]any); ok {
 		request.Input = input
 	}
-	
+
 	if toolUseID, ok := data["tool_use_id"].(string); ok {
 		request.ToolUseID = &toolUseID
 	}
-	
+
 	// Process through hook processor
 	output, err := cp.hookProcessor.ProcessHookCallback(request)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Hook output is already a map[string]any
 	return output, nil
 }
@@ -421,18 +443,18 @@ func (cp *ControlProtocol) sendControlRequest(
 ) (map[string]any, error) {
 	// Generate unique request ID
 	requestID := cp.generateRequestID()
-	
+
 	// Create pending response
 	pending := &pendingControlResponse{
 		ch:  make(chan *shared.ResponsePayload, 1),
 		err: make(chan error, 1),
 	}
-	
+
 	// Register pending response
 	cp.responseMu.Lock()
 	cp.pendingResponses[requestID] = pending
 	cp.responseMu.Unlock()
-	
+
 	// Build control request
 	controlReq := shared.ControlRequest{
 		Type:      shared.ControlTypeRequest,
@@ -442,7 +464,7 @@ func (cp *ControlProtocol) sendControlRequest(
 			Data:    request,
 		},
 	}
-	
+
 	// Marshal and send
 	reqBytes, err := json.Marshal(controlReq)
 	if err != nil {
@@ -451,29 +473,29 @@ func (cp *ControlProtocol) sendControlRequest(
 		cp.responseMu.Unlock()
 		return nil, fmt.Errorf("failed to marshal control request: %w", err)
 	}
-	
+
 	// Add newline for line-delimited JSON
 	reqBytes = append(reqBytes, '\n')
-	
+
 	if err := cp.writeFn(reqBytes); err != nil {
 		cp.responseMu.Lock()
 		delete(cp.pendingResponses, requestID)
 		cp.responseMu.Unlock()
 		return nil, fmt.Errorf("failed to send control request: %w", err)
 	}
-	
+
 	// Wait for response with timeout
 	ctx, cancel := context.WithTimeout(cp.ctx, timeout)
 	defer cancel()
 	pending.cancel = cancel
-	
+
 	select {
 	case response := <-pending.ch:
 		return response.Response, nil
-		
+
 	case err := <-pending.err:
 		return nil, err
-		
+
 	case <-ctx.Done():
 		cp.responseMu.Lock()
 		delete(cp.pendingResponses, requestID)
@@ -486,7 +508,7 @@ func (cp *ControlProtocol) sendControlRequest(
 func (cp *ControlProtocol) generateRequestID() string {
 	cp.counterMu.Lock()
 	defer cp.counterMu.Unlock()
-	
+
 	cp.requestCounter++
 	return fmt.Sprintf("req_%d_%d", cp.requestCounter, time.Now().UnixNano())
 }

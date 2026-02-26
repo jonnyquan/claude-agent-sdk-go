@@ -6,22 +6,22 @@ import "encoding/json"
 
 // Control message types
 const (
-	ControlTypeRequest         = "control_request"
-	ControlTypeResponse        = "control_response"
-	ControlTypeCancelRequest   = "control_cancel_request"
+	ControlTypeRequest       = "control_request"
+	ControlTypeResponse      = "control_response"
+	ControlTypeCancelRequest = "control_cancel_request"
 )
 
 // Control request subtypes
 const (
-	ControlSubtypeInitialize   = "initialize"
-	ControlSubtypeCanUseTool   = "can_use_tool"
-	ControlSubtypeHookCallback = "hook_callback"
-	ControlSubtypeMCPMessage   = "mcp_message"
-	ControlSubtypeMCPStatus        = "mcp_status"
-	ControlSubtypeRewindFiles      = "rewind_files"
+	ControlSubtypeInitialize        = "initialize"
+	ControlSubtypeCanUseTool        = "can_use_tool"
+	ControlSubtypeHookCallback      = "hook_callback"
+	ControlSubtypeMCPMessage        = "mcp_message"
+	ControlSubtypeMCPStatus         = "mcp_status"
+	ControlSubtypeRewindFiles       = "rewind_files"
 	ControlSubtypeSetPermissionMode = "set_permission_mode"
-	ControlSubtypeSetModel         = "set_model"
-	ControlSubtypeInterrupt        = "interrupt"
+	ControlSubtypeSetModel          = "set_model"
+	ControlSubtypeInterrupt         = "interrupt"
 )
 
 // Control response subtypes
@@ -65,18 +65,18 @@ func (r *RequestPayload) UnmarshalJSON(data []byte) error {
 	if err := unmarshalJSON(data, &raw); err != nil {
 		return err
 	}
-	
+
 	if subtype, ok := raw["subtype"].(string); ok {
 		r.Subtype = subtype
 	}
-	
+
 	r.Data = make(map[string]any)
 	for k, v := range raw {
 		if k != "subtype" {
 			r.Data[k] = v
 		}
 	}
-	
+
 	return nil
 }
 
@@ -90,25 +90,25 @@ type ResponsePayload struct {
 
 // InitializeRequest represents initialization request data.
 type InitializeRequest struct {
-	Subtype string                        `json:"subtype"` // "initialize"
+	Subtype string                         `json:"subtype"` // "initialize"
 	Hooks   map[string][]HookMatcherConfig `json:"hooks,omitempty"`
 	Agents  map[string]map[string]any      `json:"agents,omitempty"`
 }
 
 // HookMatcherConfig represents hook configuration sent to CLI.
 type HookMatcherConfig struct {
-	Matcher         string   `json:"matcher"`
+	Matcher         *string  `json:"matcher"`
 	HookCallbackIDs []string `json:"hookCallbackIds"`
 	Timeout         *float64 `json:"timeout,omitempty"`
 }
 
 // CanUseToolRequest represents a tool permission request from CLI.
 type CanUseToolRequest struct {
-	Subtype              string         `json:"subtype"`   // "can_use_tool"
-	ToolName             string         `json:"tool_name"`
-	Input                map[string]any `json:"input"`
-	PermissionSuggestions []any         `json:"permission_suggestions,omitempty"`
-	BlockedPath          *string        `json:"blocked_path,omitempty"`
+	Subtype               string         `json:"subtype"` // "can_use_tool"
+	ToolName              string         `json:"tool_name"`
+	Input                 map[string]any `json:"input"`
+	PermissionSuggestions []any          `json:"permission_suggestions,omitempty"`
+	BlockedPath           *string        `json:"blocked_path,omitempty"`
 }
 
 // HookCallbackRequest represents a hook callback request from CLI.
@@ -121,11 +121,11 @@ type HookCallbackRequest struct {
 
 // PermissionResponse represents the response to can_use_tool request.
 type PermissionResponse struct {
-	Behavior           string         `json:"behavior"` // "allow" or "deny"
-	UpdatedInput       any            `json:"updatedInput,omitempty"`
-	UpdatedPermissions []any          `json:"updatedPermissions,omitempty"`
-	Message            string         `json:"message,omitempty"`
-	Interrupt          bool           `json:"interrupt,omitempty"`
+	Behavior           string `json:"behavior"` // "allow" or "deny"
+	UpdatedInput       any    `json:"updatedInput,omitempty"`
+	UpdatedPermissions []any  `json:"updatedPermissions,omitempty"`
+	Message            string `json:"message,omitempty"`
+	Interrupt          bool   `json:"interrupt,omitempty"`
 }
 
 // HookCallbackResponse represents the response to hook_callback request.

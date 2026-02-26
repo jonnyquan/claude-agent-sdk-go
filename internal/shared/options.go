@@ -95,14 +95,14 @@ type Options struct {
 	DisallowedTools []string    `json:"disallowed_tools,omitempty"`
 
 	// System Prompts & Model
-	SystemPrompt       interface{} `json:"system_prompt,omitempty"` // string, *string, or SystemPromptPreset
-	AppendSystemPrompt *string   `json:"append_system_prompt,omitempty"`
-	Model              *string   `json:"model,omitempty"`
-	FallbackModel      *string   `json:"fallback_model,omitempty"`
-	MaxThinkingTokens  *int             `json:"max_thinking_tokens,omitempty"`
-	Thinking           *ThinkingConfig  `json:"thinking,omitempty"`  // Takes precedence over MaxThinkingTokens
-	Effort             *EffortLevel     `json:"effort,omitempty"`    // Effort level for thinking depth
-	Betas              []SdkBeta        `json:"betas,omitempty"`     // Beta features to enable
+	SystemPrompt       interface{}     `json:"system_prompt,omitempty"` // string, *string, or SystemPromptPreset
+	AppendSystemPrompt *string         `json:"append_system_prompt,omitempty"`
+	Model              *string         `json:"model,omitempty"`
+	FallbackModel      *string         `json:"fallback_model,omitempty"`
+	MaxThinkingTokens  *int            `json:"max_thinking_tokens,omitempty"`
+	Thinking           *ThinkingConfig `json:"thinking,omitempty"` // Takes precedence over MaxThinkingTokens
+	Effort             *EffortLevel    `json:"effort,omitempty"`   // Effort level for thinking depth
+	Betas              []SdkBeta       `json:"betas,omitempty"`    // Beta features to enable
 
 	// Permission & Safety System
 	PermissionMode           *PermissionMode `json:"permission_mode,omitempty"`
@@ -114,8 +114,8 @@ type Options struct {
 	MaxTurns               int      `json:"max_turns,omitempty"`
 	MaxBudgetUSD           *float64 `json:"max_budget_usd,omitempty"` // Budget limit in USD for API costs
 	Settings               *string  `json:"settings,omitempty"`
-	IncludePartialMessages bool    `json:"include_partial_messages,omitempty"`
-	ForkSession            bool    `json:"fork_session,omitempty"`
+	IncludePartialMessages bool     `json:"include_partial_messages,omitempty"`
+	ForkSession            bool     `json:"fork_session,omitempty"`
 
 	// File System & Context
 	Cwd            *string  `json:"cwd,omitempty"`
@@ -124,8 +124,11 @@ type Options struct {
 	SettingSources []string `json:"setting_sources,omitempty"`
 
 	// MCP Integration
-	McpServers    map[string]McpServerConfig `json:"mcp_servers,omitempty"`
-	MaxBufferSize *int                       `json:"max_buffer_size,omitempty"`
+	McpServers map[string]McpServerConfig `json:"mcp_servers,omitempty"`
+	// McpConfig allows passing raw MCP config as a file path or JSON string
+	// (Python SDK parity for mcp_servers as str | Path).
+	McpConfig     *string `json:"mcp_config,omitempty"`
+	MaxBufferSize *int    `json:"max_buffer_size,omitempty"`
 
 	// Hooks for intercepting and controlling SDK behavior
 	// Key: HookEvent type (e.g., "PreToolUse", "PostToolUse")
@@ -361,14 +364,14 @@ func (o *Options) Validate() error {
 // NewOptions creates Options with default values.
 func NewOptions() *Options {
 	return &Options{
-		AllowedTools:      []string{},
-		DisallowedTools:   []string{},
-		AddDirs:           []string{},
-		McpServers:        make(map[string]McpServerConfig),
-		Agents:            make(map[string]AgentDefinition),
-		Plugins:           []PluginConfig{},
-		Hooks:             make(map[string][]any),
-		ExtraArgs:         make(map[string]*string),
-		ExtraEnv:          make(map[string]string),
+		AllowedTools:    []string{},
+		DisallowedTools: []string{},
+		AddDirs:         []string{},
+		McpServers:      make(map[string]McpServerConfig),
+		Agents:          make(map[string]AgentDefinition),
+		Plugins:         []PluginConfig{},
+		Hooks:           make(map[string][]any),
+		ExtraArgs:       make(map[string]*string),
+		ExtraEnv:        make(map[string]string),
 	}
 }

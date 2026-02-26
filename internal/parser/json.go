@@ -166,7 +166,7 @@ func (p *Parser) processJSONLine(jsonLine string) (shared.Message, error) {
 func (p *Parser) processJSONLineUnlocked(jsonLine string) (shared.Message, error) {
 	debugLog("[SDK-Parser] 🔧 processJSONLineUnlocked: input length=%d", len(jsonLine))
 	debugLog("[SDK-Parser] 🔧 Buffer before: length=%d", p.buffer.Len())
-	
+
 	p.buffer.WriteString(jsonLine)
 	debugLog("[SDK-Parser] 🔧 Buffer after write: length=%d", p.buffer.Len())
 
@@ -220,9 +220,18 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 		uuid = &uuidVal
 	}
 
-	// Parse tool_use_result field
+	// Parse parent_tool_use_id field (top-level)
+	var parentToolUseID *string
+	if ptuid, ok := data["parent_tool_use_id"].(string); ok {
+		parentToolUseID = &ptuid
+	}
+
+	// Parse tool_use_result field (top-level, matching Python parser)
 	var toolUseResult map[string]interface{}
-	if tur, ok := messageData["tool_use_result"].(map[string]interface{}); ok {
+	if tur, ok := data["tool_use_result"].(map[string]interface{}); ok {
+		toolUseResult = tur
+	} else if tur, ok := messageData["tool_use_result"].(map[string]interface{}); ok {
+		// Fallback for compatibility with any older/non-standard payload shapes.
 		toolUseResult = tur
 	}
 
@@ -232,9 +241,10 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 		// String content - create directly
 		debugLog("[SDK-Parser] 👤 UserMessage has string content: %q", c)
 		return &shared.UserMessage{
-			Content:       c,
-			UUID:          uuid,
-			ToolUseResult: toolUseResult,
+			Content:         c,
+			UUID:            uuid,
+			ParentToolUseID: parentToolUseID,
+			ToolUseResult:   toolUseResult,
 		}, nil
 	case []any:
 		// Array of content blocks
@@ -251,9 +261,10 @@ func (p *Parser) parseUserMessage(data map[string]any) (*shared.UserMessage, err
 			}
 		}
 		return &shared.UserMessage{
-			Content:       blocks,
-			UUID:          uuid,
-			ToolUseResult: toolUseResult,
+			Content:         blocks,
+			UUID:            uuid,
+			ParentToolUseID: parentToolUseID,
+			ToolUseResult:   toolUseResult,
 		}, nil
 	default:
 		return nil, shared.NewMessageParseError("invalid user message content type", data)
@@ -300,11 +311,18 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 		errorField = &errType
 	}
 
+	// Parse parent_tool_use_id field from top-level data
+	var parentToolUseID *string
+	if ptuid, ok := data["parent_tool_use_id"].(string); ok {
+		parentToolUseID = &ptuid
+	}
+
 	debugLog("[SDK-Parser] 🤖 AssistantMessage parsed successfully")
 	return &shared.AssistantMessage{
-		Content: blocks,
-		Model:   model,
-		Error:   errorField,
+		Content:         blocks,
+		Model:           model,
+		ParentToolUseID: parentToolUseID,
+		Error:           errorField,
 	}, nil
 }
 

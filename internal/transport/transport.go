@@ -107,11 +107,26 @@ func (t *Transport) Connect(ctx context.Context) error {
 		return fmt.Errorf("transport already connected")
 	}
 
+	// Match Python SDK behavior: even with explicit CLI path, run a best-effort
+	// version compatibility check (warn only, never fail connect).
+	if t.options != nil && t.options.CLIPath != nil && *t.options.CLIPath != "" {
+		if verErr := discovery.CheckCLIVersion(*t.options.CLIPath); verErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Warning: %v\n", verErr)
+		}
+	}
+
 	// Build command - always use streaming mode
 	args := discovery.BuildCommand(t.cliPath, t.options)
 
 	//nolint:gosec // G204: This is the core CLI SDK functionality - subprocess execution is required
 	t.cmd = exec.CommandContext(ctx, args[0], args[1:]...)
+
+	// Apply requested process user if configured.
+	if t.options != nil {
+		if err := applyUserOption(t.cmd, t.options.User); err != nil {
+			return err
+		}
+	}
 
 	// Set up environment: system env → user env → SDK vars (SDK always wins)
 	env := os.Environ()
@@ -160,9 +175,12 @@ func (t *Transport) Connect(ctx context.Context) error {
 	}
 
 	// Capture stderr with pipe for error visibility
-	stderrPipe, err := t.cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	var stderrPipe io.ReadCloser
+	if shouldPipeStderr(t.options) {
+		stderrPipe, err = t.cmd.StderrPipe()
+		if err != nil {
+			return fmt.Errorf("failed to create stderr pipe: %w", err)
+		}
 	}
 
 	// Start the process
@@ -181,9 +199,11 @@ func (t *Transport) Connect(ctx context.Context) error {
 	t.msgChan = make(chan shared.Message, channelBufferSize)
 	t.errChan = make(chan error, channelBufferSize)
 
-	// Start stderr reader goroutine
-	t.wg.Add(1)
-	go t.readStderr(stderrPipe)
+	// Start stderr reader goroutine when explicitly requested via callback/debug flag.
+	if stderrPipe != nil {
+		t.wg.Add(1)
+		go t.readStderr(stderrPipe)
+	}
 
 	// Start I/O handling goroutines
 	t.wg.Add(1)
@@ -196,16 +216,15 @@ func (t *Transport) Connect(ctx context.Context) error {
 		t.hookProcessor = query.NewHookProcessor(t.ctx, t.options)
 	}
 
-	// Create write function for control protocol
+	// Create write function for control protocol.
+	// IMPORTANT: Use captured stdin directly to avoid re-entering t.mu while Connect
+	// still holds the write lock (which can deadlock during Initialize()).
+	stdin := t.stdin
 	writeFn := func(data []byte) error {
-		t.mu.RLock()
-		defer t.mu.RUnlock()
-
-		if !t.connected || t.stdin == nil {
-			return fmt.Errorf("transport not connected")
+		if stdin == nil {
+			return fmt.Errorf("transport stdin not initialized")
 		}
-
-		_, err := t.stdin.Write(data)
+		_, err := stdin.Write(data)
 		return err
 	}
 
@@ -257,7 +276,8 @@ func (t *Transport) Connect(ctx context.Context) error {
 				"role":    "user",
 				"content": *t.promptArg,
 			},
-			SessionID: "default",
+			// Match Python one-shot query behavior: empty session_id by default.
+			SessionID: "",
 		}
 		data, marshalErr := json.Marshal(streamMsg)
 		if marshalErr != nil {
@@ -266,6 +286,10 @@ func (t *Transport) Connect(ctx context.Context) error {
 		if _, writeErr := t.stdin.Write(append(data, '\n')); writeErr != nil {
 			return fmt.Errorf("failed to send prompt: %w", writeErr)
 		}
+		if closeErr := t.stdin.Close(); closeErr != nil {
+			return fmt.Errorf("failed to end input after prompt: %w", closeErr)
+		}
+		t.stdin = nil
 	}
 
 	t.connected = true
@@ -300,6 +324,23 @@ func (t *Transport) SendMessage(ctx context.Context, message shared.StreamMessag
 		return fmt.Errorf("failed to write message: %w", err)
 	}
 
+	return nil
+}
+
+// EndInput closes stdin to signal no more input messages will be sent.
+// This mirrors Python transport.end_input() behavior used by one-shot queries.
+func (t *Transport) EndInput(_ context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.stdin == nil {
+		return nil
+	}
+
+	if err := t.stdin.Close(); err != nil {
+		return fmt.Errorf("failed to close stdin: %w", err)
+	}
+	t.stdin = nil
 	return nil
 }
 
@@ -462,18 +503,15 @@ func (t *Transport) readStderr(stderr io.ReadCloser) {
 	defer stderr.Close()
 
 	scanner := bufio.NewScanner(stderr)
+	debugToStderr := shouldDebugToStderr(t.options)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if len(line) > 0 {
 			// If stderr callback is configured, call it
 			if t.options != nil && t.options.Stderr != nil {
 				t.options.Stderr(line)
-			} else {
-				select {
-				case t.errChan <- fmt.Errorf("CLI stderr: %s", line):
-				default:
-					// Channel full, skip (prevent blocking)
-				}
+			} else if debugToStderr {
+				_, _ = fmt.Fprintln(os.Stderr, line)
 			}
 		}
 	}
@@ -486,6 +524,14 @@ func (t *Transport) handleStdout() {
 	defer close(t.errChan)
 
 	scanner := bufio.NewScanner(t.stdout)
+	maxScannerBuffer := parsing.MaxBufferSize
+	if t.options != nil && t.options.MaxBufferSize != nil && *t.options.MaxBufferSize > 0 {
+		maxScannerBuffer = *t.options.MaxBufferSize
+	}
+	if maxScannerBuffer < 64*1024 {
+		maxScannerBuffer = 64 * 1024
+	}
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
 
 	for scanner.Scan() {
 		select {
@@ -552,6 +598,21 @@ func (t *Transport) handleStdout() {
 		case <-t.ctx.Done():
 		}
 	}
+}
+
+func shouldPipeStderr(options *shared.Options) bool {
+	if options == nil {
+		return false
+	}
+	return options.Stderr != nil || shouldDebugToStderr(options)
+}
+
+func shouldDebugToStderr(options *shared.Options) bool {
+	if options == nil || options.ExtraArgs == nil {
+		return false
+	}
+	_, ok := options.ExtraArgs["debug-to-stderr"]
+	return ok
 }
 
 // isProcessAlreadyFinishedError checks if an error indicates the process has already terminated.

@@ -273,7 +273,7 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 			}
 		}
 	}
-	
+
 	return cmd
 }
 
@@ -367,7 +367,17 @@ func addFileSystemFlags(cmd []string, options *shared.Options) []string {
 }
 
 func addMCPFlags(cmd []string, options *shared.Options) []string {
-	if options == nil || len(options.McpServers) == 0 {
+	if options == nil {
+		return cmd
+	}
+
+	// Raw MCP config takes precedence (parity with Python mcp_servers as string/path).
+	if options.McpConfig != nil && *options.McpConfig != "" {
+		cmd = append(cmd, "--mcp-config", *options.McpConfig)
+		return cmd
+	}
+
+	if len(options.McpServers) == 0 {
 		return cmd
 	}
 
@@ -543,12 +553,12 @@ func CheckCLIVersion(cliPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to check CLI version: %w", err)
 	}
-	
+
 	version := strings.TrimSpace(string(output))
 	// Version format: "claude-code/2.0.0" or just "2.0.0"
 	version = strings.TrimPrefix(version, "claude-code/")
 	version = strings.TrimPrefix(version, "v")
-	
+
 	if !isVersionSufficient(version, MinimumCLIVersion) {
 		return fmt.Errorf(
 			"Claude Code CLI version %s is below minimum required version %s. "+
@@ -557,7 +567,7 @@ func CheckCLIVersion(cliPath string) error {
 			MinimumCLIVersion,
 		)
 	}
-	
+
 	return nil
 }
 
@@ -566,7 +576,7 @@ func CheckCLIVersion(cliPath string) error {
 func isVersionSufficient(current, required string) bool {
 	currentParts := parseVersion(current)
 	requiredParts := parseVersion(required)
-	
+
 	for i := 0; i < 3; i++ {
 		if currentParts[i] > requiredParts[i] {
 			return true
@@ -575,7 +585,7 @@ func isVersionSufficient(current, required string) bool {
 			return false
 		}
 	}
-	
+
 	return true // Equal versions are sufficient
 }
 
@@ -583,7 +593,7 @@ func isVersionSufficient(current, required string) bool {
 func parseVersion(version string) [3]int {
 	parts := strings.Split(version, ".")
 	var result [3]int
-	
+
 	for i := 0; i < 3 && i < len(parts); i++ {
 		// Extract numeric part only (handle cases like "2.0.0-beta")
 		numStr := strings.Split(parts[i], "-")[0]
@@ -591,7 +601,7 @@ func parseVersion(version string) [3]int {
 			result[i] = num
 		}
 	}
-	
+
 	return result
 }
 

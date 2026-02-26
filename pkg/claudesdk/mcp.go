@@ -96,6 +96,9 @@ type ToolDef struct {
 	// Description explains what the tool does.
 	Description string
 
+	// Annotations provides optional MCP tool metadata.
+	Annotations map[string]interface{}
+
 	// InputSchema defines the tool's parameters.
 	// Can be:
 	// - map[string]string: Simple type mapping {"name": "string", "age": "integer"}
@@ -187,6 +190,7 @@ func CreateSDKMcpServer(name string, version string, tools ...*ToolDef) *shared.
 			Name:        tool.Name,
 			Description: tool.Description,
 			InputSchema: tool.InputSchema,
+			Annotations: tool.Annotations,
 			Handler:     wrappedHandler,
 		})
 		if err != nil {
@@ -218,6 +222,22 @@ func Tool(name, description string, inputSchema interface{}, handler ToolHandler
 		Name:        name,
 		Description: description,
 		InputSchema: inputSchema,
+		Handler:     handler,
+	}
+}
+
+// ToolWithAnnotations is a convenience helper for creating tools with MCP annotations.
+func ToolWithAnnotations(
+	name, description string,
+	inputSchema interface{},
+	annotations map[string]interface{},
+	handler ToolHandler,
+) *ToolDef {
+	return &ToolDef{
+		Name:        name,
+		Description: description,
+		InputSchema: inputSchema,
+		Annotations: annotations,
 		Handler:     handler,
 	}
 }

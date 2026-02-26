@@ -2,6 +2,7 @@
 //
 // This package enables programmatic interaction with Claude Code CLI through two main APIs:
 //   - Query() for one-shot requests with automatic cleanup
+//   - QueryStream() for one-shot streaming input requests
 //   - Client for bidirectional streaming conversations
 //
 // The SDK follows Go-native patterns with goroutines and channels instead of
