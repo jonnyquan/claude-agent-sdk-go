@@ -8,16 +8,16 @@ import (
 type HookEvent string
 
 const (
-	HookEventPreToolUse        HookEvent = "PreToolUse"
-	HookEventPostToolUse       HookEvent = "PostToolUse"
+	HookEventPreToolUse         HookEvent = "PreToolUse"
+	HookEventPostToolUse        HookEvent = "PostToolUse"
 	HookEventPostToolUseFailure HookEvent = "PostToolUseFailure"
-	HookEventUserPromptSubmit  HookEvent = "UserPromptSubmit"
-	HookEventStop              HookEvent = "Stop"
-	HookEventSubagentStop      HookEvent = "SubagentStop"
-	HookEventPreCompact        HookEvent = "PreCompact"
-	HookEventNotification      HookEvent = "Notification"
-	HookEventSubagentStart     HookEvent = "SubagentStart"
-	HookEventPermissionRequest HookEvent = "PermissionRequest"
+	HookEventUserPromptSubmit   HookEvent = "UserPromptSubmit"
+	HookEventStop               HookEvent = "Stop"
+	HookEventSubagentStop       HookEvent = "SubagentStop"
+	HookEventPreCompact         HookEvent = "PreCompact"
+	HookEventNotification       HookEvent = "Notification"
+	HookEventSubagentStart      HookEvent = "SubagentStart"
+	HookEventPermissionRequest  HookEvent = "PermissionRequest"
 )
 
 // BaseHookInput contains common fields present across many hook events.
@@ -93,10 +93,10 @@ type PostToolUseFailureHookInput struct {
 // NotificationHookInput represents input data for Notification hook events.
 type NotificationHookInput struct {
 	BaseHookInput
-	HookEventName    string `json:"hook_event_name"`
-	Message          string `json:"message"`
+	HookEventName    string  `json:"hook_event_name"`
+	Message          string  `json:"message"`
 	Title            *string `json:"title,omitempty"`
-	NotificationType string `json:"notification_type"`
+	NotificationType string  `json:"notification_type"`
 }
 
 // SubagentStartHookInput represents input data for SubagentStart hook events.
@@ -110,20 +110,20 @@ type SubagentStartHookInput struct {
 // PermissionRequestHookInput represents input data for PermissionRequest hook events.
 type PermissionRequestHookInput struct {
 	BaseHookInput
-	HookEventName        string         `json:"hook_event_name"`
-	ToolName             string         `json:"tool_name"`
-	ToolInput            map[string]any `json:"tool_input"`
-	PermissionSuggestions []any         `json:"permission_suggestions,omitempty"`
+	HookEventName         string         `json:"hook_event_name"`
+	ToolName              string         `json:"tool_name"`
+	ToolInput             map[string]any `json:"tool_input"`
+	PermissionSuggestions []any          `json:"permission_suggestions,omitempty"`
 }
 
 // HookInput is a union type for all hook inputs.
 // Use type assertion to access specific fields based on hook_event_name.
-type HookInput = map[string]any
+type HookInput = any
 
 // PreToolUseHookSpecificOutput represents hook-specific output for PreToolUse events.
 type PreToolUseHookSpecificOutput struct {
 	HookEventName            string         `json:"hookEventName"`
-	PermissionDecision       string         `json:"permissionDecision,omitempty"`       // "allow", "deny", or "ask"
+	PermissionDecision       string         `json:"permissionDecision,omitempty"` // "allow", "deny", or "ask"
 	PermissionDecisionReason string         `json:"permissionDecisionReason,omitempty"`
 	UpdatedInput             map[string]any `json:"updatedInput,omitempty"`
 	AdditionalContext        string         `json:"additionalContext,omitempty"`
@@ -131,8 +131,8 @@ type PreToolUseHookSpecificOutput struct {
 
 // PostToolUseHookSpecificOutput represents hook-specific output for PostToolUse events.
 type PostToolUseHookSpecificOutput struct {
-	HookEventName       string      `json:"hookEventName"`
-	AdditionalContext   string      `json:"additionalContext,omitempty"`
+	HookEventName        string      `json:"hookEventName"`
+	AdditionalContext    string      `json:"additionalContext,omitempty"`
 	UpdatedMCPToolOutput interface{} `json:"updatedMCPToolOutput,omitempty"`
 }
 
@@ -237,21 +237,21 @@ const (
 // NewPreToolUseOutput creates a PreToolUse hook output with permission decision.
 func NewPreToolUseOutput(decision, reason string, updatedInput map[string]any) HookJSONOutput {
 	output := make(HookJSONOutput)
-	
+
 	hookSpecific := map[string]any{
-		"hookEventName":       "PreToolUse",
-		"permissionDecision":  decision,
+		"hookEventName":      "PreToolUse",
+		"permissionDecision": decision,
 	}
-	
+
 	if reason != "" {
 		output["reason"] = reason
 		hookSpecific["permissionDecisionReason"] = reason
 	}
-	
+
 	if updatedInput != nil {
 		hookSpecific["updatedInput"] = updatedInput
 	}
-	
+
 	output["hookSpecificOutput"] = hookSpecific
 	return output
 }
@@ -259,7 +259,7 @@ func NewPreToolUseOutput(decision, reason string, updatedInput map[string]any) H
 // NewPostToolUseOutput creates a PostToolUse hook output with additional context.
 func NewPostToolUseOutput(additionalContext string) HookJSONOutput {
 	output := make(HookJSONOutput)
-	
+
 	if additionalContext != "" {
 		hookSpecific := map[string]any{
 			"hookEventName":     "PostToolUse",
@@ -267,7 +267,7 @@ func NewPostToolUseOutput(additionalContext string) HookJSONOutput {
 		}
 		output["hookSpecificOutput"] = hookSpecific
 	}
-	
+
 	return output
 }
 
@@ -275,15 +275,15 @@ func NewPostToolUseOutput(additionalContext string) HookJSONOutput {
 func NewBlockingOutput(systemMessage, reason string) HookJSONOutput {
 	output := make(HookJSONOutput)
 	output["decision"] = "block"
-	
+
 	if systemMessage != "" {
 		output["systemMessage"] = systemMessage
 	}
-	
+
 	if reason != "" {
 		output["reason"] = reason
 	}
-	
+
 	return output
 }
 
@@ -292,11 +292,11 @@ func NewStopOutput(stopReason string) HookJSONOutput {
 	output := make(HookJSONOutput)
 	continueVal := false
 	output["continue"] = &continueVal
-	
+
 	if stopReason != "" {
 		output["stopReason"] = stopReason
 	}
-	
+
 	return output
 }
 
@@ -304,10 +304,10 @@ func NewStopOutput(stopReason string) HookJSONOutput {
 func NewAsyncOutput(timeout *int) HookJSONOutput {
 	output := make(HookJSONOutput)
 	output["async"] = true
-	
+
 	if timeout != nil {
 		output["asyncTimeout"] = *timeout
 	}
-	
+
 	return output
 }

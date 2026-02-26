@@ -355,7 +355,7 @@ func (cp *ControlProtocol) handleHookCallback(data map[string]any) (map[string]a
 		request.CallbackID = callbackID
 	}
 
-	if input, ok := data["input"].(map[string]any); ok {
+	if input, exists := data["input"]; exists {
 		request.Input = input
 	}
 
@@ -499,6 +499,9 @@ func (cp *ControlProtocol) sendControlRequest(
 
 	select {
 	case response := <-pending.ch:
+		if response.Response == nil {
+			return map[string]any{}, nil
+		}
 		return response.Response, nil
 
 	case err := <-pending.err:

@@ -675,6 +675,71 @@ func TestHandleJSONRPC_CallTool(t *testing.T) {
 	}
 }
 
+func TestHandleJSONRPC_CallToolHandlerErrorReturnsIsErrorResult(t *testing.T) {
+	server := NewServer("test", "1.0.0")
+
+	tool := &ToolDefinition{
+		Name:        "always_fail",
+		Description: "Always fails",
+		Handler: func(ctx context.Context, args map[string]interface{}) ([]Content, error) {
+			return nil, fmt.Errorf("boom")
+		},
+	}
+	if err := server.RegisterTool(tool); err != nil {
+		t.Fatalf("Failed to register tool: %v", err)
+	}
+
+	request := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      9,
+		Method:  "tools/call",
+		Params: map[string]interface{}{
+			"name":      "always_fail",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	requestData, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+
+	responseData, err := server.HandleJSONRPC(9, requestData)
+	if err != nil {
+		t.Fatalf("HandleJSONRPC failed: %v", err)
+	}
+
+	var response JSONRPCResponse
+	if err := json.Unmarshal(responseData, &response); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if response.Error != nil {
+		t.Fatalf("expected success response with is_error result, got error: %#v", response.Error)
+	}
+
+	result, ok := response.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not map[string]interface{}, got %T", response.Result)
+	}
+	isError, ok := result["is_error"].(bool)
+	if !ok || !isError {
+		t.Fatalf("expected is_error=true, got %#v", result["is_error"])
+	}
+	content, ok := result["content"].([]interface{})
+	if !ok || len(content) != 1 {
+		t.Fatalf("expected single content item, got %#v", result["content"])
+	}
+	first, ok := content[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map content item, got %T", content[0])
+	}
+	if first["type"] != "text" {
+		t.Fatalf("expected text content type, got %#v", first["type"])
+	}
+	if first["text"] != "boom" {
+		t.Fatalf("expected error text 'boom', got %#v", first["text"])
+	}
+}
+
 // TestHandleJSONRPC_InvalidJSON tests handling invalid JSON
 func TestHandleJSONRPC_InvalidJSON(t *testing.T) {
 	server := NewServer("test", "1.0.0")

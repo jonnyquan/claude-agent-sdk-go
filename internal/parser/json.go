@@ -483,7 +483,10 @@ func (p *Parser) parseThinkingBlock(data map[string]any) (shared.ContentBlock, e
 	if !ok {
 		return nil, shared.NewMessageParseError("thinking block missing thinking field", data)
 	}
-	signature, _ := data["signature"].(string) // Optional field
+	signature, ok := data["signature"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("thinking block missing signature field", data)
+	}
 	return &shared.ThinkingBlock{
 		Type:      shared.ContentBlockTypeThinking,
 		Thinking:  thinking,

@@ -113,10 +113,10 @@ type CanUseToolRequest struct {
 
 // HookCallbackRequest represents a hook callback request from CLI.
 type HookCallbackRequest struct {
-	Subtype    string         `json:"subtype"`     // "hook_callback"
-	CallbackID string         `json:"callback_id"` // Hook callback identifier
-	Input      map[string]any `json:"input"`       // Hook input data
-	ToolUseID  *string        `json:"tool_use_id,omitempty"`
+	Subtype    string  `json:"subtype"`     // "hook_callback"
+	CallbackID string  `json:"callback_id"` // Hook callback identifier
+	Input      any     `json:"input"`       // Hook input data
+	ToolUseID  *string `json:"tool_use_id,omitempty"`
 }
 
 // PermissionResponse represents the response to can_use_tool request.

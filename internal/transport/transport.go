@@ -597,6 +597,39 @@ func (t *Transport) handleStdout() {
 		case t.errChan <- scanErr:
 		case <-t.ctx.Done():
 		}
+		return
+	}
+
+	// Match Python SDK behavior: after stdout closes, wait for process exit
+	// and surface non-zero exit status as ProcessError.
+	if t.ctx != nil {
+		select {
+		case <-t.ctx.Done():
+			return
+		default:
+		}
+	}
+	if t.cmd == nil {
+		return
+	}
+
+	if err := t.cmd.Wait(); err != nil {
+		exitCode := -1
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+		processErr := shared.NewProcessError(
+			"Command failed",
+			exitCode,
+			"Check stderr output for details",
+		)
+		if t.controlProtocol != nil {
+			t.controlProtocol.FailPendingRequests(processErr)
+		}
+		select {
+		case t.errChan <- processErr:
+		case <-t.ctx.Done():
+		}
 	}
 }
 

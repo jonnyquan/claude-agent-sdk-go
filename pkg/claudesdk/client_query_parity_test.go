@@ -364,6 +364,38 @@ func TestReceiveMessagesWhenNotConnectedReturnsSystemErrorMessage(t *testing.T) 
 	}
 }
 
+func TestReceiveMessagesSurfacesTransportErrorsAsSystemMessages(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	client := NewClientWithTransport(transport)
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect() returned error: %v", err)
+	}
+
+	transport.errChan <- errors.New("transport boom")
+	close(transport.errChan)
+
+	msgCh := client.ReceiveMessages(context.Background())
+	msg, ok := <-msgCh
+	if !ok {
+		t.Fatal("expected one system error message")
+	}
+	sys, ok := msg.(*SystemMessage)
+	if !ok {
+		t.Fatalf("expected SystemMessage, got %T", msg)
+	}
+	if got := strings.ToLower(sys.Subtype); got != "error" {
+		t.Fatalf("expected subtype error, got %q", sys.Subtype)
+	}
+	if got, _ := sys.Data["error"].(string); !strings.Contains(got, "transport boom") {
+		t.Fatalf("unexpected error payload: %#v", sys.Data)
+	}
+	if _, stillOpen := <-msgCh; stillOpen {
+		t.Fatal("expected channel to close after error message")
+	}
+}
+
 func TestClientValidateOptionsRejectsCanUseToolConflict(t *testing.T) {
 	t.Parallel()
 
@@ -707,6 +739,52 @@ func TestQueryStreamWithTransportWaitsForFirstResultBeforeEndInputWhenHooksPrese
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("expected EndInput() once after first result, got %d", transport.endInputCount())
+}
+
+func TestQueryWithTransportClosesTransportWhenInitialSendFails(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	transport.sendErr = errors.New("send failed")
+
+	iter, err := QueryWithTransport(context.Background(), "hello", transport)
+	if err != nil {
+		t.Fatalf("QueryWithTransport returned error: %v", err)
+	}
+
+	_, err = iter.Next(context.Background())
+	if err == nil {
+		t.Fatal("expected send failure")
+	}
+	if !strings.Contains(err.Error(), "failed to send message") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if transport.closeCount() != 1 {
+		t.Fatalf("expected transport Close() once on send failure, got %d", transport.closeCount())
+	}
+}
+
+func TestQueryWithTransportClosesTransportWhenEndInputFails(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	transport.endInputErr = errors.New("end input failed")
+
+	iter, err := QueryWithTransport(context.Background(), "hello", transport)
+	if err != nil {
+		t.Fatalf("QueryWithTransport returned error: %v", err)
+	}
+
+	_, err = iter.Next(context.Background())
+	if err == nil {
+		t.Fatal("expected end input failure")
+	}
+	if !strings.Contains(err.Error(), "failed to end input") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if transport.closeCount() != 1 {
+		t.Fatalf("expected transport Close() once on end input failure, got %d", transport.closeCount())
+	}
 }
 
 func TestConfigureStreamingQueryOptionsCanUseToolConflict(t *testing.T) {

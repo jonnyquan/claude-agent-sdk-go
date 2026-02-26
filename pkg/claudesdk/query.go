@@ -274,12 +274,14 @@ func (qi *queryIterator) start() error {
 	}
 
 	if err := qi.transport.SendMessage(qi.ctx, streamMsg); err != nil {
+		_ = qi.transport.Close()
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
 	// Match Python one-shot query behavior: close stdin after sending prompt.
 	if ender, ok := qi.transport.(inputEnder); ok {
 		if err := ender.EndInput(qi.ctx); err != nil {
+			_ = qi.transport.Close()
 			return fmt.Errorf("failed to end input: %w", err)
 		}
 	}

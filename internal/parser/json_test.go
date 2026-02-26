@@ -723,6 +723,16 @@ func TestContentBlockErrorConditions(t *testing.T) {
 			expectError: "thinking block missing thinking field",
 		},
 		{
+			name:        "thinking_block_missing_signature",
+			blockData:   map[string]any{"type": "thinking", "thinking": "I need to think..."},
+			expectError: "thinking block missing signature field",
+		},
+		{
+			name:        "thinking_block_invalid_signature_type",
+			blockData:   map[string]any{"type": "thinking", "thinking": "I need to think...", "signature": 123},
+			expectError: "thinking block missing signature field",
+		},
+		{
 			name:        "tool_use_block_missing_id",
 			blockData:   map[string]any{"type": "tool_use", "name": "Read"},
 			expectError: "tool_use block missing id field",
@@ -766,15 +776,16 @@ func TestContentBlockErrorConditions(t *testing.T) {
 func TestContentBlockOptionalFields(t *testing.T) {
 	parser := setupParserTest(t)
 
-	// Test thinking block without signature
+	// Test thinking block with signature
 	thinkingBlock, err := parser.parseContentBlock(map[string]any{
-		"type":     "thinking",
-		"thinking": "I need to think...",
+		"type":      "thinking",
+		"thinking":  "I need to think...",
+		"signature": "sig-123",
 	})
 	assertNoParseError(t, err)
 	thinking := thinkingBlock.(*shared.ThinkingBlock)
-	if thinking.Signature != "" {
-		t.Errorf("Expected empty signature, got %q", thinking.Signature)
+	if thinking.Signature != "sig-123" {
+		t.Errorf("Expected signature sig-123, got %q", thinking.Signature)
 	}
 
 	// Test tool use block without input

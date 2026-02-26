@@ -128,8 +128,12 @@ func TestHookProcessor_ProcessHookCallback(t *testing.T) {
 		called = true
 
 		// Verify input
-		if toolName, ok := input["tool_name"].(string); !ok || toolName != "Bash" {
-			t.Errorf("Expected tool_name 'Bash', got %v", input["tool_name"])
+		inputMap, ok := input.(map[string]any)
+		if !ok {
+			t.Fatalf("expected map input, got %T", input)
+		}
+		if toolName, ok := inputMap["tool_name"].(string); !ok || toolName != "Bash" {
+			t.Errorf("Expected tool_name 'Bash', got %v", inputMap["tool_name"])
 		}
 
 		return shared.NewPreToolUseOutput(shared.PermissionDecisionAllow, "Test approved", nil), nil

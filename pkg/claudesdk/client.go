@@ -422,6 +422,7 @@ func (c *ClientImpl) ReceiveMessages(_ context.Context) <-chan Message {
 	c.mu.RLock()
 	connected := c.connected
 	msgChan := c.msgChan
+	errChan := c.errChan
 	c.mu.RUnlock()
 
 	if !connected || msgChan == nil {
@@ -439,8 +440,39 @@ func (c *ClientImpl) ReceiveMessages(_ context.Context) <-chan Message {
 		return errorChan
 	}
 
-	// Return the transport's message channel directly
-	return msgChan
+	// Forward messages while surfacing transport errors as system messages.
+	out := make(chan Message)
+	go func() {
+		defer close(out)
+		localMsgChan := msgChan
+		localErrChan := errChan
+		for {
+			select {
+			case msg, ok := <-localMsgChan:
+				if !ok {
+					return
+				}
+				out <- msg
+			case err, ok := <-localErrChan:
+				if !ok {
+					localErrChan = nil
+					continue
+				}
+				if err != nil {
+					out <- &SystemMessage{
+						Subtype: "error",
+						Data: map[string]any{
+							"type":    MessageTypeSystem,
+							"subtype": "error",
+							"error":   err.Error(),
+						},
+					}
+				}
+				return
+			}
+		}
+	}()
+	return out
 }
 
 // ReceiveResponse returns an iterator for the response messages.

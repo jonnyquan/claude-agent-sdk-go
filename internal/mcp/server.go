@@ -159,7 +159,18 @@ func (s *Server) handleCallTool(ctx context.Context, request JSONRPCRequest) ([]
 	// Call the tool
 	content, err := s.CallTool(ctx, name, args)
 	if err != nil {
-		return s.errorResponse(request.ID, -32603, fmt.Sprintf("Tool execution failed: %v", err), err)
+		// Match Python SDK bridge behavior: handler failures are returned as
+		// successful tool results with is_error=true and text content.
+		result := map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": err.Error(),
+				},
+			},
+			"is_error": true,
+		}
+		return s.successResponse(request.ID, result)
 	}
 
 	// Build result
