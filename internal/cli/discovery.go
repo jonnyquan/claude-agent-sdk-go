@@ -297,13 +297,13 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	if options.MaxBudgetUSD != nil {
 		cmd = append(cmd, "--max-budget-usd", strconv.FormatFloat(*options.MaxBudgetUSD, 'f', -1, 64))
 	}
-	
+
 	// Handle settings and sandbox: merge sandbox into settings if both are provided
 	settingsValue := buildSettingsValue(options)
 	if settingsValue != "" {
 		cmd = append(cmd, "--settings", settingsValue)
 	}
-	
+
 	return cmd
 }
 
@@ -462,12 +462,9 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 	if options.ForkSession {
 		cmd = append(cmd, "--fork-session")
 	}
-	// Always emit --setting-sources (empty string if not set, matching Python SDK)
-	sourcesValue := ""
 	if len(options.SettingSources) > 0 {
-		sourcesValue = strings.Join(options.SettingSources, ",")
+		cmd = append(cmd, "--setting-sources", strings.Join(options.SettingSources, ","))
 	}
-	cmd = append(cmd, "--setting-sources", sourcesValue)
 
 	// Note: Agents are now sent via initialize request, not as CLI flag
 
@@ -565,12 +562,12 @@ func CheckCLIVersion(cliPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to check CLI version: %w", err)
 	}
-	
+
 	version := strings.TrimSpace(string(output))
 	// Version format: "claude-code/2.0.0" or just "2.0.0"
 	version = strings.TrimPrefix(version, "claude-code/")
 	version = strings.TrimPrefix(version, "v")
-	
+
 	if !isVersionSufficient(version, MinimumCLIVersion) {
 		return fmt.Errorf(
 			"Claude Code CLI version %s is below minimum required version %s. "+
@@ -579,7 +576,7 @@ func CheckCLIVersion(cliPath string) error {
 			MinimumCLIVersion,
 		)
 	}
-	
+
 	return nil
 }
 
@@ -588,7 +585,7 @@ func CheckCLIVersion(cliPath string) error {
 func isVersionSufficient(current, required string) bool {
 	currentParts := parseVersion(current)
 	requiredParts := parseVersion(required)
-	
+
 	for i := 0; i < 3; i++ {
 		if currentParts[i] > requiredParts[i] {
 			return true
@@ -597,7 +594,7 @@ func isVersionSufficient(current, required string) bool {
 			return false
 		}
 	}
-	
+
 	return true // Equal versions are sufficient
 }
 
@@ -605,7 +602,7 @@ func isVersionSufficient(current, required string) bool {
 func parseVersion(version string) [3]int {
 	parts := strings.Split(version, ".")
 	var result [3]int
-	
+
 	for i := 0; i < 3 && i < len(parts); i++ {
 		// Extract numeric part only (handle cases like "2.0.0-beta")
 		numStr := strings.Split(parts[i], "-")[0]
@@ -613,7 +610,7 @@ func parseVersion(version string) [3]int {
 			result[i] = num
 		}
 	}
-	
+
 	return result
 }
 

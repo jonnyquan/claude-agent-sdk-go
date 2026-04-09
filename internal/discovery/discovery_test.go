@@ -168,3 +168,14 @@ func TestBuildSettingsValueFallbacksToFileWhenJSONParseFails(t *testing.T) {
 		t.Fatalf("expected sandbox.enabled=true, got %#v", sandbox["enabled"])
 	}
 }
+
+func TestAddAdvancedFlagsOmitsEmptySettingSources(t *testing.T) {
+	t.Parallel()
+
+	cmd := addAdvancedFlags([]string{"claude"}, shared.NewOptions())
+	for _, arg := range cmd {
+		if arg == "--setting-sources" {
+			t.Fatalf("expected empty setting sources to be omitted, got %v", cmd)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -380,6 +381,17 @@ func TestCallTool_ContextCancellation(t *testing.T) {
 func TestBuildJSONSchema(t *testing.T) {
 	server := NewServer("test", "1.0.0")
 
+	type nestedInput struct {
+		Count int `json:"count"`
+	}
+	type structInput struct {
+		Name     string      `json:"name" description:"User's name"`
+		Age      int         `json:"age"`
+		Nickname *string     `json:"nickname,omitempty"`
+		Tags     []string    `json:"tags"`
+		Nested   nestedInput `json:"nested,omitempty"`
+	}
+
 	tests := []struct {
 		name     string
 		input    interface{}
@@ -436,6 +448,35 @@ func TestBuildJSONSchema(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "struct schema",
+			input: structInput{},
+			expected: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "User's name",
+					},
+					"age":      map[string]interface{}{"type": "integer"},
+					"nickname": map[string]interface{}{"type": "string"},
+					"tags": map[string]interface{}{
+						"type": "array",
+						"items": map[string]interface{}{
+							"type": "string",
+						},
+					},
+					"nested": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"count": map[string]interface{}{"type": "integer"},
+						},
+						"required": []string{"count"},
+					},
+				},
+				"required": []string{"name", "age", "tags"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -456,6 +497,20 @@ func TestBuildJSONSchema(t *testing.T) {
 			expectedProps := tt.expected["properties"].(map[string]interface{})
 			if len(props) != len(expectedProps) {
 				t.Errorf("Expected %d properties, got %d", len(expectedProps), len(props))
+			}
+
+			if expectedRequired, ok := tt.expected["required"].([]string); ok {
+				gotRequired, _ := result["required"].([]string)
+				if strings.Join(gotRequired, ",") != strings.Join(expectedRequired, ",") {
+					t.Errorf("Expected required=%v, got %v", expectedRequired, gotRequired)
+				}
+			}
+
+			if tt.name == "struct schema" {
+				nameSchema, _ := props["name"].(map[string]interface{})
+				if got := nameSchema["description"]; got != "User's name" {
+					t.Errorf("Expected struct field description to be preserved, got %v", got)
+				}
 			}
 		})
 	}

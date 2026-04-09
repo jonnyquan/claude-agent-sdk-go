@@ -10,8 +10,11 @@ import (
 type ContentType string
 
 const (
-	ContentTypeText  ContentType = "text"
-	ContentTypeImage ContentType = "image"
+	ContentTypeText         ContentType = "text"
+	ContentTypeImage        ContentType = "image"
+	ContentTypeAudio        ContentType = "audio"
+	ContentTypeResourceLink ContentType = "resource_link"
+	ContentTypeResource     ContentType = "resource"
 )
 
 // Content represents content in MCP protocol.
@@ -42,18 +45,63 @@ func (i *ImageContent) GetType() ContentType {
 	return ContentTypeImage
 }
 
+// AudioContent represents audio content with base64 data.
+type AudioContent struct {
+	Type     ContentType `json:"type"`
+	Data     string      `json:"data"`
+	MimeType string      `json:"mimeType"`
+}
+
+// GetType returns the content type for AudioContent.
+func (a *AudioContent) GetType() ContentType {
+	return ContentTypeAudio
+}
+
+// ResourceLinkContent represents a resource link content block.
+type ResourceLinkContent struct {
+	Type        ContentType `json:"type"`
+	Name        string      `json:"name,omitempty"`
+	URI         string      `json:"uri,omitempty"`
+	Description string      `json:"description,omitempty"`
+}
+
+// GetType returns the content type for ResourceLinkContent.
+func (r *ResourceLinkContent) GetType() ContentType {
+	return ContentTypeResourceLink
+}
+
+// EmbeddedResource represents an embedded resource payload.
+type EmbeddedResource struct {
+	URI      string `json:"uri,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
+// ResourceContent represents an embedded resource content block.
+type ResourceContent struct {
+	Type     ContentType      `json:"type"`
+	Resource EmbeddedResource `json:"resource"`
+}
+
+// GetType returns the content type for ResourceContent.
+func (r *ResourceContent) GetType() ContentType {
+	return ContentTypeResource
+}
+
 // Tool represents an MCP tool definition.
 type Tool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"inputSchema"`
 	Annotations map[string]interface{} `json:"annotations,omitempty"`
+	Meta        map[string]interface{} `json:"_meta,omitempty"`
 }
 
 // CallToolResult represents the result of a tool call.
 type CallToolResult struct {
-	Content []Content              `json:"content"`
-	IsError bool                   `json:"isError,omitempty"`
+	Content  []Content              `json:"content"`
+	IsError  bool                   `json:"isError,omitempty"`
 	Metadata map[string]interface{} `json:"_meta,omitempty"`
 }
 
@@ -72,16 +120,16 @@ type JSONRPCRequest struct {
 
 // JSONRPCResponse represents a JSON-RPC response.
 type JSONRPCResponse struct {
-	JSONRPC string                 `json:"jsonrpc"`
-	ID      interface{}            `json:"id"`
-	Result  interface{}            `json:"result,omitempty"`
-	Error   *JSONRPCError          `json:"error,omitempty"`
+	JSONRPC string        `json:"jsonrpc"`
+	ID      interface{}   `json:"id"`
+	Result  interface{}   `json:"result,omitempty"`
+	Error   *JSONRPCError `json:"error,omitempty"`
 }
 
 // JSONRPCError represents a JSON-RPC error.
 type JSONRPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
@@ -101,6 +149,24 @@ func MarshalContent(content []Content) ([]byte, error) {
 				"type":     "image",
 				"data":     v.Data,
 				"mimeType": v.MimeType,
+			}
+		case *AudioContent:
+			result[i] = map[string]interface{}{
+				"type":     "audio",
+				"data":     v.Data,
+				"mimeType": v.MimeType,
+			}
+		case *ResourceLinkContent:
+			result[i] = map[string]interface{}{
+				"type":        "resource_link",
+				"name":        v.Name,
+				"uri":         v.URI,
+				"description": v.Description,
+			}
+		case *ResourceContent:
+			result[i] = map[string]interface{}{
+				"type":     "resource",
+				"resource": v.Resource,
 			}
 		}
 	}
@@ -139,6 +205,36 @@ func UnmarshalContent(data []byte) ([]Content, error) {
 					})
 				}
 			}
+		case ContentTypeAudio:
+			if data, ok := item["data"].(string); ok {
+				if mimeType, ok := item["mimeType"].(string); ok {
+					result = append(result, &AudioContent{
+						Type:     ContentTypeAudio,
+						Data:     data,
+						MimeType: mimeType,
+					})
+				}
+			}
+		case ContentTypeResourceLink:
+			link := &ResourceLinkContent{Type: ContentTypeResourceLink}
+			link.Name, _ = item["name"].(string)
+			link.URI, _ = item["uri"].(string)
+			link.Description, _ = item["description"].(string)
+			result = append(result, link)
+		case ContentTypeResource:
+			resourceMap, ok := item["resource"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			resource := EmbeddedResource{}
+			resource.URI, _ = resourceMap["uri"].(string)
+			resource.Text, _ = resourceMap["text"].(string)
+			resource.Blob, _ = resourceMap["blob"].(string)
+			resource.MimeType, _ = resourceMap["mimeType"].(string)
+			result = append(result, &ResourceContent{
+				Type:     ContentTypeResource,
+				Resource: resource,
+			})
 		}
 	}
 

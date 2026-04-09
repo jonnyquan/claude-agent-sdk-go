@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -69,6 +71,7 @@ func (s *Server) ListTools() []Tool {
 			Description: toolDef.Description,
 			InputSchema: schema,
 			Annotations: toolDef.Annotations,
+			Meta:        buildToolMeta(toolDef.Annotations),
 		})
 	}
 	return result
@@ -175,10 +178,64 @@ func (s *Server) handleCallTool(ctx context.Context, request JSONRPCRequest) ([]
 
 	// Build result
 	result := map[string]interface{}{
-		"content": content,
+		"content": normalizeToolResultContent(content),
 	}
 
 	return s.successResponse(request.ID, result)
+}
+
+func buildToolMeta(annotations map[string]interface{}) map[string]interface{} {
+	if annotations == nil {
+		return nil
+	}
+	raw, ok := annotations["maxResultSizeChars"]
+	if !ok {
+		return nil
+	}
+	switch value := raw.(type) {
+	case int:
+		return map[string]interface{}{"anthropic/maxResultSizeChars": value}
+	case int32:
+		return map[string]interface{}{"anthropic/maxResultSizeChars": value}
+	case int64:
+		return map[string]interface{}{"anthropic/maxResultSizeChars": value}
+	case float64:
+		return map[string]interface{}{"anthropic/maxResultSizeChars": int(value)}
+	default:
+		return nil
+	}
+}
+
+func normalizeToolResultContent(content []Content) []Content {
+	result := make([]Content, 0, len(content))
+	for _, item := range content {
+		switch value := item.(type) {
+		case *ResourceLinkContent:
+			parts := make([]string, 0, 3)
+			if value.Name != "" {
+				parts = append(parts, value.Name)
+			}
+			if value.URI != "" {
+				parts = append(parts, value.URI)
+			}
+			if value.Description != "" {
+				parts = append(parts, value.Description)
+			}
+			text := "Resource link"
+			if len(parts) > 0 {
+				text = strings.Join(parts, "\n")
+			}
+			result = append(result, &TextContent{Type: ContentTypeText, Text: text})
+		case *ResourceContent:
+			if value.Resource.Text == "" {
+				continue
+			}
+			result = append(result, &TextContent{Type: ContentTypeText, Text: value.Resource.Text})
+		default:
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func (s *Server) successResponse(id interface{}, result interface{}) ([]byte, error) {
@@ -227,12 +284,29 @@ func (s *Server) buildJSONSchema(schema interface{}) map[string]interface{} {
 		// Convert typed map to JSON schema
 		return s.convertTypedMapToJSON(v)
 	default:
+		if converted := s.convertStructSchemaToJSON(v); converted != nil {
+			return converted
+		}
 		// Return empty schema
 		return map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		}
 	}
+}
+
+func (s *Server) convertStructSchemaToJSON(schema interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+	t := reflect.TypeOf(schema)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+	return schemaForType(t)
 }
 
 // Type represents a Go type for schema definition.
@@ -304,6 +378,88 @@ func (s *Server) convertSimpleSchemaToJSON(schema map[string]interface{}) map[st
 		"properties": properties,
 		"required":   required,
 	}
+}
+
+func schemaForType(t reflect.Type) map[string]interface{} {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+
+	switch t.Kind() {
+	case reflect.String:
+		return map[string]interface{}{"type": "string"}
+	case reflect.Bool:
+		return map[string]interface{}{"type": "boolean"}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return map[string]interface{}{"type": "integer"}
+	case reflect.Float32, reflect.Float64:
+		return map[string]interface{}{"type": "number"}
+	case reflect.Slice, reflect.Array:
+		return map[string]interface{}{
+			"type":  "array",
+			"items": schemaForType(t.Elem()),
+		}
+	case reflect.Map, reflect.Interface:
+		return map[string]interface{}{"type": "object"}
+	case reflect.Struct:
+		properties := make(map[string]interface{})
+		required := make([]string, 0, t.NumField())
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			if field.PkgPath != "" {
+				continue
+			}
+			name, optional, ok := schemaFieldName(field)
+			if !ok {
+				continue
+			}
+			fieldSchema := schemaForType(field.Type)
+			if desc := field.Tag.Get("description"); desc != "" {
+				fieldSchema["description"] = desc
+			} else if desc := field.Tag.Get("jsonschema_description"); desc != "" {
+				fieldSchema["description"] = desc
+			}
+			properties[name] = fieldSchema
+			if !optional {
+				required = append(required, name)
+			}
+		}
+
+		schema := map[string]interface{}{
+			"type":       "object",
+			"properties": properties,
+		}
+		if len(required) > 0 {
+			schema["required"] = required
+		}
+		return schema
+	default:
+		return map[string]interface{}{"type": "string"}
+	}
+}
+
+func schemaFieldName(field reflect.StructField) (string, bool, bool) {
+	tag := field.Tag.Get("json")
+	if tag == "-" {
+		return "", false, false
+	}
+
+	name := field.Name
+	optional := field.Type.Kind() == reflect.Pointer
+	if tag != "" {
+		parts := strings.Split(tag, ",")
+		if parts[0] != "" {
+			name = parts[0]
+		}
+		for _, part := range parts[1:] {
+			if part == "omitempty" {
+				optional = true
+			}
+		}
+	}
+
+	return name, optional, true
 }
 
 // Name returns the server name.

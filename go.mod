@@ -1,3 +1,5 @@
 module github.com/jonnyquan/claude-agent-sdk-go
 
-go 1.18
+go 1.23.0
+
+require golang.org/x/text v0.25.0

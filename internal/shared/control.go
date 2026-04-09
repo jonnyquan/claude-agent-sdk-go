@@ -18,6 +18,10 @@ const (
 	ControlSubtypeHookCallback      = "hook_callback"
 	ControlSubtypeMCPMessage        = "mcp_message"
 	ControlSubtypeMCPStatus         = "mcp_status"
+	ControlSubtypeGetContextUsage   = "get_context_usage"
+	ControlSubtypeMCPReconnect      = "mcp_reconnect"
+	ControlSubtypeMCPToggle         = "mcp_toggle"
+	ControlSubtypeStopTask          = "stop_task"
 	ControlSubtypeRewindFiles       = "rewind_files"
 	ControlSubtypeSetPermissionMode = "set_permission_mode"
 	ControlSubtypeSetModel          = "set_model"
@@ -90,9 +94,10 @@ type ResponsePayload struct {
 
 // InitializeRequest represents initialization request data.
 type InitializeRequest struct {
-	Subtype string                         `json:"subtype"` // "initialize"
-	Hooks   map[string][]HookMatcherConfig `json:"hooks,omitempty"`
-	Agents  map[string]map[string]any      `json:"agents,omitempty"`
+	Subtype                string                         `json:"subtype"` // "initialize"
+	Hooks                  map[string][]HookMatcherConfig `json:"hooks,omitempty"`
+	Agents                 map[string]map[string]any      `json:"agents,omitempty"`
+	ExcludeDynamicSections *bool                          `json:"excludeDynamicSections,omitempty"`
 }
 
 // HookMatcherConfig represents hook configuration sent to CLI.
@@ -109,6 +114,8 @@ type CanUseToolRequest struct {
 	Input                 map[string]any `json:"input"`
 	PermissionSuggestions []any          `json:"permission_suggestions,omitempty"`
 	BlockedPath           *string        `json:"blocked_path,omitempty"`
+	ToolUseID             *string        `json:"tool_use_id,omitempty"`
+	AgentID               *string        `json:"agent_id,omitempty"`
 }
 
 // HookCallbackRequest represents a hook callback request from CLI.

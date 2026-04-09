@@ -203,6 +203,12 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 		} else {
 			cmd = append(cmd, "--system-prompt", "")
 		}
+	case shared.SystemPromptFile:
+		cmd = append(cmd, "--system-prompt-file", sp.Path)
+	case *shared.SystemPromptFile:
+		if sp != nil {
+			cmd = append(cmd, "--system-prompt-file", sp.Path)
+		}
 	case shared.SystemPromptPreset:
 		// Preset: only pass --append-system-prompt if "append" is set
 		if sp.Append != nil {
@@ -222,30 +228,17 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 	if options.FallbackModel != nil {
 		cmd = append(cmd, "--fallback-model", *options.FallbackModel)
 	}
-	// Resolve thinking config → --max-thinking-tokens
-	// `Thinking` takes precedence over the deprecated `MaxThinkingTokens`
-	var resolvedMaxThinkingTokens *int
-	if options.MaxThinkingTokens != nil {
-		v := *options.MaxThinkingTokens
-		resolvedMaxThinkingTokens = &v
-	}
 	if options.Thinking != nil {
 		switch options.Thinking.Type {
 		case shared.ThinkingTypeAdaptive:
-			if resolvedMaxThinkingTokens == nil {
-				v := 32000
-				resolvedMaxThinkingTokens = &v
-			}
+			cmd = append(cmd, "--thinking", "adaptive")
 		case shared.ThinkingTypeEnabled:
-			v := options.Thinking.BudgetTokens
-			resolvedMaxThinkingTokens = &v
+			cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", options.Thinking.BudgetTokens))
 		case shared.ThinkingTypeDisabled:
-			v := 0
-			resolvedMaxThinkingTokens = &v
+			cmd = append(cmd, "--thinking", "disabled")
 		}
-	}
-	if resolvedMaxThinkingTokens != nil {
-		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", *resolvedMaxThinkingTokens))
+	} else if options.MaxThinkingTokens != nil {
+		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", *options.MaxThinkingTokens))
 	}
 
 	// Add effort flag
@@ -294,11 +287,17 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	if options.Resume != nil {
 		cmd = append(cmd, "--resume", *options.Resume)
 	}
+	if options.SessionID != nil {
+		cmd = append(cmd, "--session-id", *options.SessionID)
+	}
 	if options.MaxTurns > 0 {
 		cmd = append(cmd, "--max-turns", fmt.Sprintf("%d", options.MaxTurns))
 	}
 	if options.MaxBudgetUSD != nil {
 		cmd = append(cmd, "--max-budget-usd", strconv.FormatFloat(*options.MaxBudgetUSD, 'f', -1, 64))
+	}
+	if options.TaskBudget != nil {
+		cmd = append(cmd, "--task-budget", fmt.Sprintf("%d", options.TaskBudget.Total))
 	}
 	// Handle settings and sandbox: merge sandbox into settings if both are provided
 	settingsValue := buildSettingsValue(options)
@@ -467,12 +466,9 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 	if options.ForkSession {
 		cmd = append(cmd, "--fork-session")
 	}
-	// Always emit --setting-sources (empty string if not set, matching Python SDK)
-	sourcesValue := ""
 	if len(options.SettingSources) > 0 {
-		sourcesValue = strings.Join(options.SettingSources, ",")
+		cmd = append(cmd, "--setting-sources", strings.Join(options.SettingSources, ","))
 	}
-	cmd = append(cmd, "--setting-sources", sourcesValue)
 
 	// Note: Agents are now sent via initialize request, not as CLI flag
 

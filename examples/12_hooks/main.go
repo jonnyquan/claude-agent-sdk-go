@@ -14,22 +14,26 @@ func strPtr(s string) *string { return &s }
 
 // Example 1: PreToolUse hook to block certain bash commands
 func checkBashCommand(input claudecode.HookInput, toolUseID *string, ctx claudecode.HookContext) (claudecode.HookJSONOutput, error) {
-	toolName, _ := input["tool_name"].(string)
-	toolInput, _ := input["tool_input"].(map[string]any)
-	
+	hookInput, ok := input.(claudecode.PreToolUseHookInput)
+	if !ok {
+		return claudecode.NewPreToolUseOutput(claudecode.PermissionDecisionAllow, "", nil), nil
+	}
+	toolName := hookInput.ToolName
+	toolInput := hookInput.ToolInput
+
 	if toolName != "Bash" {
 		return claudecode.NewPreToolUseOutput(claudecode.PermissionDecisionAllow, "", nil), nil
 	}
-	
+
 	command, _ := toolInput["command"].(string)
-	
+
 	// Block dangerous commands
 	dangerousCommands := []string{"rm -rf", "sudo", "mkfs", "dd if="}
 	for _, dangerous := range dangerousCommands {
 		if strings.Contains(command, dangerous) {
 			return claudecode.HookJSONOutput{
-				"reason":         fmt.Sprintf("Command contains dangerous pattern: %s", dangerous),
-				"systemMessage":  "⚠️ Dangerous command blocked by security hook",
+				"reason":        fmt.Sprintf("Command contains dangerous pattern: %s", dangerous),
+				"systemMessage": "⚠️ Dangerous command blocked by security hook",
 				"hookSpecificOutput": map[string]any{
 					"hookEventName":            "PreToolUse",
 					"permissionDecision":       claudecode.PermissionDecisionDeny,
@@ -38,16 +42,20 @@ func checkBashCommand(input claudecode.HookInput, toolUseID *string, ctx claudec
 			}, nil
 		}
 	}
-	
+
 	return claudecode.NewPreToolUseOutput(claudecode.PermissionDecisionAllow, "Command approved", nil), nil
 }
 
 // Example 2: PostToolUse hook to review tool output
 func reviewToolOutput(input claudecode.HookInput, toolUseID *string, ctx claudecode.HookContext) (claudecode.HookJSONOutput, error) {
-	toolResponse, _ := input["tool_response"]
-	
+	hookInput, ok := input.(claudecode.PostToolUseHookInput)
+	if !ok {
+		return claudecode.NewPostToolUseOutput(""), nil
+	}
+	toolResponse := hookInput.ToolResponse
+
 	responseStr := fmt.Sprintf("%v", toolResponse)
-	
+
 	// Check for errors in output
 	if strings.Contains(strings.ToLower(responseStr), "error") {
 		return claudecode.HookJSONOutput{
@@ -59,20 +67,27 @@ func reviewToolOutput(input claudecode.HookInput, toolUseID *string, ctx claudec
 			},
 		}, nil
 	}
-	
+
 	return claudecode.NewPostToolUseOutput(""), nil
 }
 
 // Example 3: Hook that stops execution on critical errors
 func stopOnCriticalError(input claudecode.HookInput, toolUseID *string, ctx claudecode.HookContext) (claudecode.HookJSONOutput, error) {
-	toolResponse, _ := input["tool_response"]
+	hookInput, ok := input.(claudecode.PostToolUseHookInput)
+	if !ok {
+		continueVal := true
+		return claudecode.HookJSONOutput{
+			"continue": &continueVal,
+		}, nil
+	}
+	toolResponse := hookInput.ToolResponse
 	responseStr := fmt.Sprintf("%v", toolResponse)
-	
+
 	if strings.Contains(strings.ToLower(responseStr), "critical") {
 		log.Println("Critical error detected - stopping execution")
 		return claudecode.NewStopOutput("Critical error detected in tool output - execution halted for safety"), nil
 	}
-	
+
 	continueVal := true
 	return claudecode.HookJSONOutput{
 		"continue": &continueVal,
@@ -92,10 +107,10 @@ func addCustomInstructions(input claudecode.HookInput, toolUseID *string, ctx cl
 func examplePreToolUse() {
 	fmt.Println("=== PreToolUse Example ===")
 	fmt.Println("This example shows how PreToolUse hooks can block dangerous commands.")
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	
+
 	// Configure hook to check bash commands
 	options := []claudecode.Option{
 		claudecode.WithAllowedTools("Bash"),
@@ -104,14 +119,14 @@ func examplePreToolUse() {
 			Hooks:   []claudecode.HookCallback{checkBashCommand},
 		}),
 	}
-	
+
 	err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
 		fmt.Println("User: Try to run 'rm -rf /' (should be blocked)")
-		
+
 		if err := client.Query(ctx, "Run this bash command: rm -rf /"); err != nil {
 			return err
 		}
-		
+
 		// Process responses
 		for msg := range client.ReceiveMessages(ctx) {
 			if assistantMsg, ok := msg.(*claudecode.AssistantMessage); ok {
@@ -122,24 +137,24 @@ func examplePreToolUse() {
 				}
 			}
 		}
-		
+
 		return nil
 	}, options...)
-	
+
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 	}
-	
+
 	fmt.Println("")
 }
 
 func examplePostToolUse() {
 	fmt.Println("=== PostToolUse Example ===")
 	fmt.Println("This example shows how PostToolUse hooks can review tool output.")
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	
+
 	options := []claudecode.Option{
 		claudecode.WithAllowedTools("Bash"),
 		claudecode.WithHook(claudecode.HookEventPostToolUse, claudecode.HookMatcher{
@@ -147,14 +162,14 @@ func examplePostToolUse() {
 			Hooks:   []claudecode.HookCallback{reviewToolOutput},
 		}),
 	}
-	
+
 	err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
 		fmt.Println("User: Run a command that will produce an error: ls /nonexistent_directory")
-		
+
 		if err := client.Query(ctx, "Run this command: ls /nonexistent_directory"); err != nil {
 			return err
 		}
-		
+
 		for msg := range client.ReceiveMessages(ctx) {
 			if assistantMsg, ok := msg.(*claudecode.AssistantMessage); ok {
 				for _, block := range assistantMsg.Content {
@@ -164,24 +179,24 @@ func examplePostToolUse() {
 				}
 			}
 		}
-		
+
 		return nil
 	}, options...)
-	
+
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 	}
-	
+
 	fmt.Println("")
 }
 
 func exampleContinueControl() {
 	fmt.Println("=== Continue/Stop Control Example ===")
 	fmt.Println("This example shows how to use continue=false with stopReason to halt execution.")
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	
+
 	options := []claudecode.Option{
 		claudecode.WithAllowedTools("Bash"),
 		claudecode.WithHook(claudecode.HookEventPostToolUse, claudecode.HookMatcher{
@@ -189,14 +204,14 @@ func exampleContinueControl() {
 			Hooks:   []claudecode.HookCallback{stopOnCriticalError},
 		}),
 	}
-	
+
 	err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
 		fmt.Println("User: Run a command that outputs 'CRITICAL ERROR'")
-		
+
 		if err := client.Query(ctx, "Run this bash command: echo 'CRITICAL ERROR: system failure'"); err != nil {
 			return err
 		}
-		
+
 		for msg := range client.ReceiveMessages(ctx) {
 			if assistantMsg, ok := msg.(*claudecode.AssistantMessage); ok {
 				for _, block := range assistantMsg.Content {
@@ -206,24 +221,24 @@ func exampleContinueControl() {
 				}
 			}
 		}
-		
+
 		return nil
 	}, options...)
-	
+
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 	}
-	
+
 	fmt.Println("")
 }
 
 func exampleMultipleHooks() {
 	fmt.Println("=== Multiple Hooks Example ===")
 	fmt.Println("This example shows how to use multiple hooks together.")
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	
+
 	options := []claudecode.Option{
 		claudecode.WithAllowedTools("Bash", "Write"),
 		claudecode.WithHook(claudecode.HookEventPreToolUse, claudecode.HookMatcher{
@@ -239,14 +254,14 @@ func exampleMultipleHooks() {
 			Hooks:   []claudecode.HookCallback{addCustomInstructions},
 		}),
 	}
-	
+
 	err := claudecode.WithClient(ctx, func(client claudecode.Client) error {
 		fmt.Println("User: What is 2+2?")
-		
+
 		if err := client.Query(ctx, "What is 2+2?"); err != nil {
 			return err
 		}
-		
+
 		for msg := range client.ReceiveMessages(ctx) {
 			if assistantMsg, ok := msg.(*claudecode.AssistantMessage); ok {
 				for _, block := range assistantMsg.Content {
@@ -256,14 +271,14 @@ func exampleMultipleHooks() {
 				}
 			}
 		}
-		
+
 		return nil
 	}, options...)
-	
+
 	if err != nil {
 		log.Printf("Error: %v\n", err)
 	}
-	
+
 	fmt.Println("")
 }
 
@@ -271,18 +286,18 @@ func main() {
 	fmt.Println("Claude Agent SDK - Hooks Examples")
 	fmt.Println("===================================")
 	fmt.Println("")
-	
+
 	// Run examples
 	// Note: These examples require hook processing logic to be implemented in the SDK
 	fmt.Println("⚠️  Hook processing logic is not yet fully implemented in the Go SDK.")
 	fmt.Println("These examples demonstrate the API design and usage patterns.")
 	fmt.Println("")
-	
+
 	// Uncomment to run examples when hook processing is implemented:
 	// examplePreToolUse()
 	// examplePostToolUse()
 	// exampleContinueControl()
 	// exampleMultipleHooks()
-	
+
 	fmt.Println("Examples completed. See the code for hook usage patterns.")
 }

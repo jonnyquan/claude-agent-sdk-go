@@ -6,6 +6,7 @@ import (
 
 // Options contains configuration for Claude Code CLI interactions.
 type Options = shared.Options
+type ClaudeAgentOptions = shared.Options
 
 // PermissionMode defines the permission handling mode.
 type PermissionMode = shared.PermissionMode
@@ -42,6 +43,9 @@ type ThinkingType = shared.ThinkingType
 
 // ThinkingConfig controls extended thinking behavior.
 type ThinkingConfig = shared.ThinkingConfig
+type ThinkingConfigAdaptive = shared.ThinkingConfig
+type ThinkingConfigEnabled = shared.ThinkingConfig
+type ThinkingConfigDisabled = shared.ThinkingConfig
 
 // EffortLevel controls the effort/depth of thinking.
 type EffortLevel = shared.EffortLevel
@@ -51,6 +55,7 @@ type PluginType = shared.PluginType
 
 // PluginConfig represents plugin configuration.
 type PluginConfig = shared.PluginConfig
+type SdkPluginConfig = shared.PluginConfig
 
 // SettingSource represents a configuration source.
 type SettingSource = shared.SettingSource
@@ -62,6 +67,8 @@ type PermissionDestination = shared.PermissionDestination
 type SandboxSettings = shared.SandboxSettings
 type SandboxNetworkConfig = shared.SandboxNetworkConfig
 type SandboxIgnoreViolations = shared.SandboxIgnoreViolations
+type TaskBudget = shared.TaskBudget
+type SystemPromptFile = shared.SystemPromptFile
 
 // Re-export constants
 const (
@@ -69,6 +76,8 @@ const (
 	PermissionModeAcceptEdits       = shared.PermissionModeAcceptEdits
 	PermissionModePlan              = shared.PermissionModePlan
 	PermissionModeBypassPermissions = shared.PermissionModeBypassPermissions
+	PermissionModeDontAsk           = shared.PermissionModeDontAsk
+	PermissionModeAuto              = shared.PermissionModeAuto
 	McpServerTypeStdio              = shared.McpServerTypeStdio
 	McpServerTypeSSE                = shared.McpServerTypeSSE
 	McpServerTypeHTTP               = shared.McpServerTypeHTTP
@@ -143,6 +152,16 @@ func WithSystemPrompt(prompt string) Option {
 func WithSystemPromptPreset(preset SystemPromptPreset) Option {
 	return func(o *Options) {
 		o.SystemPrompt = preset
+	}
+}
+
+// WithSystemPromptFile sets the system prompt to load from a file.
+func WithSystemPromptFile(path string) Option {
+	return func(o *Options) {
+		o.SystemPrompt = SystemPromptFile{
+			Type: "file",
+			Path: path,
+		}
 	}
 }
 
@@ -227,6 +246,17 @@ func WithContinueConversation(continueConversation bool) Option {
 func WithResume(sessionID string) Option {
 	return func(o *Options) {
 		o.Resume = &sessionID
+	}
+}
+
+// WithSessionID sets the session ID for new sessions without using resume/continue.
+func WithSessionID(sessionID string) Option {
+	return func(o *Options) {
+		if sessionID == "" {
+			o.SessionID = nil
+			return
+		}
+		o.SessionID = &sessionID
 	}
 }
 
@@ -368,6 +398,17 @@ func WithMaxTurns(turns int) Option {
 func WithMaxBudgetUSD(budget float64) Option {
 	return func(o *Options) {
 		o.MaxBudgetUSD = &budget
+	}
+}
+
+// WithTaskBudget sets the API-side task budget in tokens.
+func WithTaskBudget(total int) Option {
+	return func(o *Options) {
+		if total <= 0 {
+			o.TaskBudget = nil
+			return
+		}
+		o.TaskBudget = &TaskBudget{Total: total}
 	}
 }
 

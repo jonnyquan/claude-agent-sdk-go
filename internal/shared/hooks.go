@@ -35,6 +35,8 @@ type PreToolUseHookInput struct {
 	ToolName      string         `json:"tool_name"`
 	ToolInput     map[string]any `json:"tool_input"`
 	ToolUseID     string         `json:"tool_use_id"`
+	AgentID       *string        `json:"agent_id,omitempty"`
+	AgentType     *string        `json:"agent_type,omitempty"`
 }
 
 // PostToolUseHookInput represents input data for PostToolUse hook events.
@@ -45,6 +47,8 @@ type PostToolUseHookInput struct {
 	ToolInput     map[string]any `json:"tool_input"`
 	ToolResponse  any            `json:"tool_response"`
 	ToolUseID     string         `json:"tool_use_id"`
+	AgentID       *string        `json:"agent_id,omitempty"`
+	AgentType     *string        `json:"agent_type,omitempty"`
 }
 
 // UserPromptSubmitHookInput represents input data for UserPromptSubmit hook events.
@@ -88,6 +92,8 @@ type PostToolUseFailureHookInput struct {
 	ToolUseID     string         `json:"tool_use_id"`
 	Error         string         `json:"error"`
 	IsInterrupt   *bool          `json:"is_interrupt,omitempty"`
+	AgentID       *string        `json:"agent_id,omitempty"`
+	AgentType     *string        `json:"agent_type,omitempty"`
 }
 
 // NotificationHookInput represents input data for Notification hook events.
@@ -114,6 +120,8 @@ type PermissionRequestHookInput struct {
 	ToolName              string         `json:"tool_name"`
 	ToolInput             map[string]any `json:"tool_input"`
 	PermissionSuggestions []any          `json:"permission_suggestions,omitempty"`
+	AgentID               *string        `json:"agent_id,omitempty"`
+	AgentType             *string        `json:"agent_type,omitempty"`
 }
 
 // HookInput is a union type for all hook inputs.

@@ -128,6 +128,14 @@ func TestBuildCommandAdvancedFlags(t *testing.T) {
 	assertNotContainsArg(t, cmd, "--agents")
 }
 
+func TestBuildCommandOmitsEmptySettingSources(t *testing.T) {
+	opts := &shared.Options{}
+
+	cmd := BuildCommand("/usr/local/bin/claude", opts)
+
+	assertNotContainsArg(t, cmd, "--setting-sources")
+}
+
 func TestBuildCommandWithMcpServers(t *testing.T) {
 	opts := &shared.Options{
 		McpServers: map[string]shared.McpServerConfig{

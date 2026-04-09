@@ -2,6 +2,7 @@ package claudesdk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -23,11 +24,18 @@ type Client interface {
 	ReceiveResponse(ctx context.Context) MessageIterator
 	Interrupt(ctx context.Context) error
 	RewindFiles(ctx context.Context, userMessageID string) error
-	GetMCPStatus(ctx context.Context) (map[string]any, error)
+	GetMCPStatus(ctx context.Context) (McpStatusResponse, error)
+	GetContextUsage(ctx context.Context) (ContextUsageResponse, error)
+	ReconnectMCPServer(ctx context.Context, serverName string) error
+	ToggleMCPServer(ctx context.Context, serverName string, enabled bool) error
+	StopTask(ctx context.Context, taskID string) error
 	SetPermissionMode(ctx context.Context, mode string) error
 	SetModel(ctx context.Context, model *string) error
 	GetServerInfo() map[string]any
 }
+
+// ClaudeSDKClient is a Python-parity alias for Client.
+type ClaudeSDKClient = Client
 
 // ClientImpl implements the Client interface.
 type ClientImpl struct {
@@ -190,6 +198,8 @@ func (c *ClientImpl) validateOptions() error {
 			PermissionModeAcceptEdits:       true,
 			PermissionModePlan:              true,
 			PermissionModeBypassPermissions: true,
+			PermissionModeDontAsk:           true,
+			PermissionModeAuto:              true,
 		}
 		if !validModes[*c.options.PermissionMode] {
 			return fmt.Errorf("invalid permission mode: %s", string(*c.options.PermissionMode))
@@ -573,9 +583,9 @@ func (c *ClientImpl) RewindFiles(ctx context.Context, userMessageID string) erro
 }
 
 // GetMCPStatus queries the MCP server status from CLI.
-func (c *ClientImpl) GetMCPStatus(ctx context.Context) (map[string]any, error) {
+func (c *ClientImpl) GetMCPStatus(ctx context.Context) (McpStatusResponse, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return McpStatusResponse{}, ctx.Err()
 	}
 
 	c.mu.RLock()
@@ -584,10 +594,90 @@ func (c *ClientImpl) GetMCPStatus(ctx context.Context) (map[string]any, error) {
 	c.mu.RUnlock()
 
 	if !connected || transport == nil {
-		return nil, fmt.Errorf("client not connected")
+		return McpStatusResponse{}, fmt.Errorf("client not connected")
 	}
 
-	return transport.GetMCPStatus(ctx)
+	raw, err := transport.GetMCPStatus(ctx)
+	if err != nil {
+		return McpStatusResponse{}, err
+	}
+	return decodeStructured[McpStatusResponse](raw)
+}
+
+// GetContextUsage queries the current context usage breakdown from CLI.
+func (c *ClientImpl) GetContextUsage(ctx context.Context) (ContextUsageResponse, error) {
+	if ctx.Err() != nil {
+		return ContextUsageResponse{}, ctx.Err()
+	}
+
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return ContextUsageResponse{}, fmt.Errorf("client not connected")
+	}
+
+	raw, err := transport.GetContextUsage(ctx)
+	if err != nil {
+		return ContextUsageResponse{}, err
+	}
+	return decodeStructured[ContextUsageResponse](raw)
+}
+
+// ReconnectMCPServer reconnects a disconnected or failed MCP server.
+func (c *ClientImpl) ReconnectMCPServer(ctx context.Context, serverName string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return fmt.Errorf("client not connected")
+	}
+
+	return transport.ReconnectMCPServer(ctx, serverName)
+}
+
+// ToggleMCPServer enables or disables an MCP server.
+func (c *ClientImpl) ToggleMCPServer(ctx context.Context, serverName string, enabled bool) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return fmt.Errorf("client not connected")
+	}
+
+	return transport.ToggleMCPServer(ctx, serverName, enabled)
+}
+
+// StopTask stops a running task.
+func (c *ClientImpl) StopTask(ctx context.Context, taskID string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	c.mu.RLock()
+	connected := c.connected
+	transport := c.transport
+	c.mu.RUnlock()
+
+	if !connected || transport == nil {
+		return fmt.Errorf("client not connected")
+	}
+
+	return transport.StopTask(ctx, taskID)
 }
 
 // SetPermissionMode changes the permission mode during conversation.
@@ -638,6 +728,18 @@ func (c *ClientImpl) GetServerInfo() map[string]any {
 	}
 
 	return transport.GetServerInfo()
+}
+
+func decodeStructured[T any](raw map[string]any) (T, error) {
+	var zero T
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return zero, err
+	}
+	if err := json.Unmarshal(data, &zero); err != nil {
+		return zero, err
+	}
+	return zero, nil
 }
 
 // clientIterator implements MessageIterator for client message reception

@@ -21,7 +21,10 @@ import (
 //	}
 type ToolHandler func(ctx context.Context, args map[string]interface{}) ([]ToolContent, error)
 
-// ToolContent represents content returned by a tool (text or image).
+// ToolAnnotations represents public MCP tool annotation metadata.
+type ToolAnnotations = map[string]interface{}
+
+// ToolContent represents content returned by a tool.
 type ToolContent interface {
 	GetType() string
 }
@@ -77,6 +80,87 @@ func (i *ImageContent) MimeType() string {
 	return i.mimeType
 }
 
+// AudioContent represents audio content returned by a tool.
+type AudioContent struct {
+	data     string
+	mimeType string
+}
+
+// NewAudioContent creates new audio content.
+func NewAudioContent(data, mimeType string) *AudioContent {
+	return &AudioContent{data: data, mimeType: mimeType}
+}
+
+// GetType returns the content type.
+func (a *AudioContent) GetType() string {
+	return "audio"
+}
+
+// Data returns the base64 encoded audio data.
+func (a *AudioContent) Data() string {
+	return a.data
+}
+
+// MimeType returns the audio MIME type.
+func (a *AudioContent) MimeType() string {
+	return a.mimeType
+}
+
+// ResourceLinkContent represents a resource link tool result.
+type ResourceLinkContent struct {
+	name        string
+	uri         string
+	description string
+}
+
+// NewResourceLinkContent creates a resource link content block.
+func NewResourceLinkContent(name, uri, description string) *ResourceLinkContent {
+	return &ResourceLinkContent{name: name, uri: uri, description: description}
+}
+
+// GetType returns the content type.
+func (r *ResourceLinkContent) GetType() string {
+	return "resource_link"
+}
+
+// Name returns the resource display name.
+func (r *ResourceLinkContent) Name() string {
+	return r.name
+}
+
+// URI returns the resource URI.
+func (r *ResourceLinkContent) URI() string {
+	return r.uri
+}
+
+// Description returns the resource description.
+func (r *ResourceLinkContent) Description() string {
+	return r.description
+}
+
+// ResourceContent represents an embedded resource tool result.
+type ResourceContent struct {
+	uri      string
+	text     string
+	blob     string
+	mimeType string
+}
+
+// NewResourceTextContent creates an embedded text resource content block.
+func NewResourceTextContent(uri, text, mimeType string) *ResourceContent {
+	return &ResourceContent{uri: uri, text: text, mimeType: mimeType}
+}
+
+// NewResourceBlobContent creates an embedded binary resource content block.
+func NewResourceBlobContent(uri, blob, mimeType string) *ResourceContent {
+	return &ResourceContent{uri: uri, blob: blob, mimeType: mimeType}
+}
+
+// GetType returns the content type.
+func (r *ResourceContent) GetType() string {
+	return "resource"
+}
+
 // ToolDef defines a tool with its schema and handler.
 //
 // Example:
@@ -97,7 +181,7 @@ type ToolDef struct {
 	Description string
 
 	// Annotations provides optional MCP tool metadata.
-	Annotations map[string]interface{}
+	Annotations ToolAnnotations
 
 	// InputSchema defines the tool's parameters.
 	// Can be:
@@ -108,6 +192,9 @@ type ToolDef struct {
 	// Handler is the function that executes the tool.
 	Handler ToolHandler
 }
+
+// SdkMcpTool is the public SDK MCP tool definition type.
+type SdkMcpTool = ToolDef
 
 // CreateSDKMcpServer creates an in-process MCP server.
 //
@@ -177,6 +264,29 @@ func CreateSDKMcpServer(name string, version string, tools ...*ToolDef) *shared.
 						Data:     c.data,
 						MimeType: c.mimeType,
 					}
+				case *AudioContent:
+					mcpContents[i] = &mcp.AudioContent{
+						Type:     mcp.ContentTypeAudio,
+						Data:     c.data,
+						MimeType: c.mimeType,
+					}
+				case *ResourceLinkContent:
+					mcpContents[i] = &mcp.ResourceLinkContent{
+						Type:        mcp.ContentTypeResourceLink,
+						Name:        c.name,
+						URI:         c.uri,
+						Description: c.description,
+					}
+				case *ResourceContent:
+					mcpContents[i] = &mcp.ResourceContent{
+						Type: mcp.ContentTypeResource,
+						Resource: mcp.EmbeddedResource{
+							URI:      c.uri,
+							Text:     c.text,
+							Blob:     c.blob,
+							MimeType: c.mimeType,
+						},
+					}
 				default:
 					return nil, fmt.Errorf("unsupported content type: %T", content)
 				}
@@ -230,7 +340,7 @@ func Tool(name, description string, inputSchema interface{}, handler ToolHandler
 func ToolWithAnnotations(
 	name, description string,
 	inputSchema interface{},
-	annotations map[string]interface{},
+	annotations ToolAnnotations,
 	handler ToolHandler,
 ) *ToolDef {
 	return &ToolDef{

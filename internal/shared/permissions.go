@@ -8,11 +8,11 @@ import (
 type PermissionUpdateType string
 
 const (
-	PermissionUpdateTypeAddRules         PermissionUpdateType = "addRules"
-	PermissionUpdateTypeReplaceRules     PermissionUpdateType = "replaceRules"
-	PermissionUpdateTypeRemoveRules      PermissionUpdateType = "removeRules"
-	PermissionUpdateTypeSetMode          PermissionUpdateType = "setMode"
-	PermissionUpdateTypeAddDirectories   PermissionUpdateType = "addDirectories"
+	PermissionUpdateTypeAddRules          PermissionUpdateType = "addRules"
+	PermissionUpdateTypeReplaceRules      PermissionUpdateType = "replaceRules"
+	PermissionUpdateTypeRemoveRules       PermissionUpdateType = "removeRules"
+	PermissionUpdateTypeSetMode           PermissionUpdateType = "setMode"
+	PermissionUpdateTypeAddDirectories    PermissionUpdateType = "addDirectories"
 	PermissionUpdateTypeRemoveDirectories PermissionUpdateType = "removeDirectories"
 )
 
@@ -54,8 +54,10 @@ type PermissionUpdate struct {
 // ToolPermissionContext provides context for tool permission callbacks.
 type ToolPermissionContext struct {
 	Context     context.Context
-	Signal      any                 // Future: abort signal support
-	Suggestions []PermissionUpdate  // Permission suggestions from CLI
+	Signal      any                // Future: abort signal support
+	Suggestions []PermissionUpdate // Permission suggestions from CLI
+	ToolUseID   *string
+	AgentID     *string
 }
 
 // PermissionResultAllow represents an allow permission result.

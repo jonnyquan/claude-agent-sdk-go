@@ -121,6 +121,8 @@ func (p *Parser) ParseMessage(data map[string]any) (shared.Message, error) {
 		msg, err = p.parseResultMessage(data)
 	case shared.MessageTypeStreamEvent:
 		msg, err = p.parseStreamEvent(data)
+	case shared.MessageTypeRateLimitEvent:
+		msg, err = p.parseRateLimitEvent(data)
 	default:
 		// Skip unknown message types for forward compatibility
 		debugLog("[SDK-Parser] ⚠️ Skipping unknown message type: %s", msgType)
@@ -323,20 +325,135 @@ func (p *Parser) parseAssistantMessage(data map[string]any) (*shared.AssistantMe
 		Model:           model,
 		ParentToolUseID: parentToolUseID,
 		Error:           errorField,
+		Usage:           mapValue(messageData, "usage"),
+		MessageID:       stringPtr(messageData, "id"),
+		StopReason:      stringPtr(messageData, "stop_reason"),
+		SessionID:       stringPtr(data, "session_id"),
+		UUID:            stringPtr(data, "uuid"),
 	}, nil
 }
 
 // parseSystemMessage parses a system message from raw JSON data.
-func (p *Parser) parseSystemMessage(data map[string]any) (*shared.SystemMessage, error) {
+func (p *Parser) parseSystemMessage(data map[string]any) (shared.Message, error) {
 	subtype, ok := data["subtype"].(string)
 	if !ok {
 		return nil, shared.NewMessageParseError("system message missing subtype field", data)
 	}
 
-	return &shared.SystemMessage{
+	base := shared.SystemMessage{
 		Subtype: subtype,
-		Data:    data, // Preserve all original data
-	}, nil
+		Data:    data,
+	}
+
+	switch subtype {
+	case "task_started":
+		taskID, ok := data["task_id"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing task_id field", data)
+		}
+		description, ok := data["description"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing description field", data)
+		}
+		uuid, ok := data["uuid"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing uuid field", data)
+		}
+		sessionID, ok := data["session_id"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing session_id field", data)
+		}
+		return &shared.TaskStartedMessage{
+			SystemMessage: base,
+			TaskID:        taskID,
+			Description:   description,
+			UUID:          uuid,
+			SessionID:     sessionID,
+			ToolUseID:     stringPtr(data, "tool_use_id"),
+			TaskType:      stringPtr(data, "task_type"),
+		}, nil
+	case "task_progress":
+		taskID, ok := data["task_id"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing task_id field", data)
+		}
+		description, ok := data["description"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing description field", data)
+		}
+		uuid, ok := data["uuid"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing uuid field", data)
+		}
+		sessionID, ok := data["session_id"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing session_id field", data)
+		}
+		usageMap, ok := data["usage"].(map[string]any)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing usage field", data)
+		}
+		usage, err := parseTaskUsage(usageMap, data)
+		if err != nil {
+			return nil, err
+		}
+		return &shared.TaskProgressMessage{
+			SystemMessage: base,
+			TaskID:        taskID,
+			Description:   description,
+			Usage:         usage,
+			UUID:          uuid,
+			SessionID:     sessionID,
+			ToolUseID:     stringPtr(data, "tool_use_id"),
+			LastToolName:  stringPtr(data, "last_tool_name"),
+		}, nil
+	case "task_notification":
+		taskID, ok := data["task_id"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing task_id field", data)
+		}
+		status, ok := data["status"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing status field", data)
+		}
+		outputFile, ok := data["output_file"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing output_file field", data)
+		}
+		summary, ok := data["summary"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing summary field", data)
+		}
+		uuid, ok := data["uuid"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing uuid field", data)
+		}
+		sessionID, ok := data["session_id"].(string)
+		if !ok {
+			return nil, shared.NewMessageParseError("system message missing session_id field", data)
+		}
+		var usage *shared.TaskUsage
+		if usageMap, ok := data["usage"].(map[string]any); ok {
+			parsedUsage, err := parseTaskUsage(usageMap, data)
+			if err != nil {
+				return nil, err
+			}
+			usage = &parsedUsage
+		}
+		return &shared.TaskNotificationMessage{
+			SystemMessage: base,
+			TaskID:        taskID,
+			Status:        shared.TaskNotificationStatus(status),
+			OutputFile:    outputFile,
+			Summary:       summary,
+			UUID:          uuid,
+			SessionID:     sessionID,
+			ToolUseID:     stringPtr(data, "tool_use_id"),
+			Usage:         usage,
+		}, nil
+	default:
+		return &base, nil
+	}
 }
 
 // parseResultMessage parses a result message from raw JSON data.
@@ -382,6 +499,9 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 		return nil, shared.NewMessageParseError("result message missing session_id field", data)
 	}
 
+	if stopReason, ok := data["stop_reason"].(string); ok {
+		result.StopReason = &stopReason
+	}
 	// Optional fields (no validation errors if missing)
 	if totalCostUSD, ok := data["total_cost_usd"].(float64); ok {
 		result.TotalCostUSD = &totalCostUSD
@@ -401,10 +521,137 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 	if structuredOutput, ok := data["structured_output"]; ok {
 		result.StructuredOutput = structuredOutput
 	}
+	if modelUsage, ok := data["modelUsage"].(map[string]any); ok {
+		result.ModelUsage = modelUsage
+	}
+	if permissionDenials, ok := data["permission_denials"].([]any); ok {
+		result.PermissionDenials = permissionDenials
+	}
+	if errorsValue, ok := data["errors"].([]any); ok {
+		errors := make([]string, 0, len(errorsValue))
+		for _, item := range errorsValue {
+			if s, ok := item.(string); ok {
+				errors = append(errors, s)
+			}
+		}
+		result.Errors = errors
+	}
+	if uuid, ok := data["uuid"].(string); ok {
+		result.UUID = &uuid
+	}
 
 	debugLog("[SDK-Parser] ✅ ResultMessage parsed: subtype=%s, session_id=%s, is_error=%v",
 		result.Subtype, result.SessionID, result.IsError)
 	return result, nil
+}
+
+// parseRateLimitEvent parses a rate_limit_event from raw JSON data.
+func (p *Parser) parseRateLimitEvent(data map[string]any) (*shared.RateLimitEvent, error) {
+	infoMap, ok := data["rate_limit_info"].(map[string]any)
+	if !ok {
+		return nil, shared.NewMessageParseError("rate_limit_event missing rate_limit_info field", data)
+	}
+	status, ok := infoMap["status"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("rate_limit_event missing status field", data)
+	}
+	uuid, ok := data["uuid"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("rate_limit_event missing uuid field", data)
+	}
+	sessionID, ok := data["session_id"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("rate_limit_event missing session_id field", data)
+	}
+
+	info := shared.RateLimitInfo{
+		Status: shared.RateLimitStatus(status),
+		Raw:    infoMap,
+	}
+	if resetsAt, ok := toInt64(infoMap["resetsAt"]); ok {
+		info.ResetsAt = &resetsAt
+	}
+	if rateLimitType, ok := infoMap["rateLimitType"].(string); ok {
+		value := shared.RateLimitType(rateLimitType)
+		info.RateLimitType = &value
+	}
+	if utilization, ok := infoMap["utilization"].(float64); ok {
+		info.Utilization = &utilization
+	}
+	if overageStatus, ok := infoMap["overageStatus"].(string); ok {
+		value := shared.RateLimitStatus(overageStatus)
+		info.OverageStatus = &value
+	}
+	if overageResetsAt, ok := toInt64(infoMap["overageResetsAt"]); ok {
+		info.OverageResetsAt = &overageResetsAt
+	}
+	if overageDisabledReason, ok := infoMap["overageDisabledReason"].(string); ok {
+		info.OverageDisabledReason = &overageDisabledReason
+	}
+
+	return &shared.RateLimitEvent{
+		MessageType:   shared.MessageTypeRateLimitEvent,
+		RateLimitInfo: info,
+		UUID:          uuid,
+		SessionID:     sessionID,
+	}, nil
+}
+
+func parseTaskUsage(data map[string]any, raw map[string]any) (shared.TaskUsage, error) {
+	totalTokens, ok := toInt(data["total_tokens"])
+	if !ok {
+		return shared.TaskUsage{}, shared.NewMessageParseError("task usage missing total_tokens field", raw)
+	}
+	toolUses, ok := toInt(data["tool_uses"])
+	if !ok {
+		return shared.TaskUsage{}, shared.NewMessageParseError("task usage missing tool_uses field", raw)
+	}
+	durationMS, ok := toInt(data["duration_ms"])
+	if !ok {
+		return shared.TaskUsage{}, shared.NewMessageParseError("task usage missing duration_ms field", raw)
+	}
+	return shared.TaskUsage{
+		TotalTokens: totalTokens,
+		ToolUses:    toolUses,
+		DurationMS:  durationMS,
+	}, nil
+}
+
+func stringPtr(data map[string]any, key string) *string {
+	if value, ok := data[key].(string); ok {
+		return &value
+	}
+	return nil
+}
+
+func mapValue(data map[string]any, key string) map[string]any {
+	if value, ok := data[key].(map[string]any); ok {
+		return value
+	}
+	return nil
+}
+
+func toInt(value any) (int, bool) {
+	if f, ok := value.(float64); ok {
+		return int(f), true
+	}
+	if i, ok := value.(int); ok {
+		return i, true
+	}
+	return 0, false
+}
+
+func toInt64(value any) (int64, bool) {
+	if f, ok := value.(float64); ok {
+		return int64(f), true
+	}
+	if i, ok := value.(int64); ok {
+		return i, true
+	}
+	if i, ok := value.(int); ok {
+		return int64(i), true
+	}
+	return 0, false
 }
 
 // parseStreamEvent parses a stream event from raw JSON data.

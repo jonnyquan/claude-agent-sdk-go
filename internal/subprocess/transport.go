@@ -62,9 +62,9 @@ type Transport struct {
 	serverInfo map[string]any
 
 	// Control and cleanup
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	// Track first result for proper stream closure
 	firstResultReceived chan struct{}
@@ -268,7 +268,14 @@ func (t *Transport) Connect(ctx context.Context) error {
 	}
 
 	// Send initialization request to CLI
-	initResult, err := t.controlProtocol.Initialize(agentsDict)
+	var excludeDynamicSections *bool
+	if preset, ok := t.options.SystemPrompt.(shared.SystemPromptPreset); ok {
+		excludeDynamicSections = preset.ExcludeDynamicSections
+	} else if preset, ok := t.options.SystemPrompt.(*shared.SystemPromptPreset); ok && preset != nil {
+		excludeDynamicSections = preset.ExcludeDynamicSections
+	}
+
+	initResult, err := t.controlProtocol.Initialize(agentsDict, excludeDynamicSections)
 	if err != nil {
 		return fmt.Errorf("failed to initialize control protocol: %w", err)
 	}

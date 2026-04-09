@@ -20,6 +20,11 @@ type AssistantMessage = shared.AssistantMessage
 
 // SystemMessage represents a system prompt message.
 type SystemMessage = shared.SystemMessage
+type TaskStartedMessage = shared.TaskStartedMessage
+type TaskProgressMessage = shared.TaskProgressMessage
+type TaskNotificationMessage = shared.TaskNotificationMessage
+type TaskNotificationStatus = shared.TaskNotificationStatus
+type TaskUsage = shared.TaskUsage
 
 // ResultMessage represents a result or status message.
 type ResultMessage = shared.ResultMessage
@@ -38,6 +43,26 @@ type ToolResultBlock = shared.ToolResultBlock
 
 // StreamEvent represents a stream event for partial message updates.
 type StreamEvent = shared.StreamEvent
+type RateLimitStatus = shared.RateLimitStatus
+type RateLimitType = shared.RateLimitType
+type RateLimitInfo = shared.RateLimitInfo
+type RateLimitEvent = shared.RateLimitEvent
+type McpToolAnnotations = shared.McpToolAnnotations
+type McpToolInfo = shared.McpToolInfo
+type McpServerInfo = shared.McpServerInfo
+type McpServerConnectionStatus = shared.McpServerConnectionStatus
+type McpServerStatusConfig = shared.McpServerStatusConfig
+type McpServerStatus = shared.McpServerStatus
+type McpStatusResponse = shared.McpStatusResponse
+type ContextUsageCategory = shared.ContextUsageCategory
+type ContextUsageMemoryFile = shared.ContextUsageMemoryFile
+type ContextUsageMcpTool = shared.ContextUsageMcpTool
+type ContextUsageAgent = shared.ContextUsageAgent
+type ContextUsageNamedTokens = shared.ContextUsageNamedTokens
+type ContextUsageResponse = shared.ContextUsageResponse
+type SDKSessionInfo = shared.SDKSessionInfo
+type SessionMessage = shared.SessionMessage
+type ForkSessionResult = shared.ForkSessionResult
 
 // Note: ImageBlock removed - not part of Python SDK ContentBlock types
 
@@ -52,11 +77,28 @@ type MessageIterator = shared.MessageIterator
 
 // Re-export message type constants
 const (
-	MessageTypeUser        = shared.MessageTypeUser
-	MessageTypeAssistant   = shared.MessageTypeAssistant
-	MessageTypeSystem      = shared.MessageTypeSystem
-	MessageTypeResult      = shared.MessageTypeResult
-	MessageTypeStreamEvent = shared.MessageTypeStreamEvent
+	MessageTypeUser                 = shared.MessageTypeUser
+	MessageTypeAssistant            = shared.MessageTypeAssistant
+	MessageTypeSystem               = shared.MessageTypeSystem
+	MessageTypeResult               = shared.MessageTypeResult
+	MessageTypeStreamEvent          = shared.MessageTypeStreamEvent
+	MessageTypeRateLimitEvent       = shared.MessageTypeRateLimitEvent
+	McpServerStatusConnected        = shared.McpServerStatusConnected
+	McpServerStatusFailed           = shared.McpServerStatusFailed
+	McpServerStatusNeedsAuth        = shared.McpServerStatusNeedsAuth
+	McpServerStatusPending          = shared.McpServerStatusPending
+	McpServerStatusDisabled         = shared.McpServerStatusDisabled
+	TaskNotificationStatusCompleted = shared.TaskNotificationStatusCompleted
+	TaskNotificationStatusFailed    = shared.TaskNotificationStatusFailed
+	TaskNotificationStatusStopped   = shared.TaskNotificationStatusStopped
+	RateLimitStatusAllowed          = shared.RateLimitStatusAllowed
+	RateLimitStatusAllowedWarning   = shared.RateLimitStatusAllowedWarning
+	RateLimitStatusRejected         = shared.RateLimitStatusRejected
+	RateLimitTypeFiveHour           = shared.RateLimitTypeFiveHour
+	RateLimitTypeSevenDay           = shared.RateLimitTypeSevenDay
+	RateLimitTypeSevenDayOpus       = shared.RateLimitTypeSevenDayOpus
+	RateLimitTypeSevenDaySonnet     = shared.RateLimitTypeSevenDaySonnet
+	RateLimitTypeOverage            = shared.RateLimitTypeOverage
 )
 
 // Re-export content block type constants
@@ -91,6 +133,10 @@ type Transport interface {
 	Close() error
 	RewindFiles(ctx context.Context, userMessageID string) error
 	GetMCPStatus(ctx context.Context) (map[string]any, error)
+	GetContextUsage(ctx context.Context) (map[string]any, error)
+	ReconnectMCPServer(ctx context.Context, serverName string) error
+	ToggleMCPServer(ctx context.Context, serverName string, enabled bool) error
+	StopTask(ctx context.Context, taskID string) error
 	SetPermissionMode(ctx context.Context, mode string) error
 	SetModel(ctx context.Context, model *string) error
 	GetServerInfo() map[string]any

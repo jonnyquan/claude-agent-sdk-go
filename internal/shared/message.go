@@ -6,11 +6,12 @@ import (
 
 // Message type constants
 const (
-	MessageTypeUser        = "user"
-	MessageTypeAssistant   = "assistant"
-	MessageTypeSystem      = "system"
-	MessageTypeResult      = "result"
-	MessageTypeStreamEvent = "stream_event"
+	MessageTypeUser           = "user"
+	MessageTypeAssistant      = "assistant"
+	MessageTypeSystem         = "system"
+	MessageTypeResult         = "result"
+	MessageTypeStreamEvent    = "stream_event"
+	MessageTypeRateLimitEvent = "rate_limit_event"
 )
 
 // Content block type constants
@@ -80,28 +81,28 @@ func (m *UserMessage) UnmarshalJSON(data []byte) error {
 		UUID            *string         `json:"uuid,omitempty"`
 		ParentToolUseID *string         `json:"parent_tool_use_id,omitempty"`
 	}
-	
+
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	
+
 	m.MessageType = MessageTypeUser
 	m.UUID = raw.UUID
 	m.ParentToolUseID = raw.ParentToolUseID
-	
+
 	// Try to unmarshal content as string first
 	var strContent string
 	if err := json.Unmarshal(raw.Content, &strContent); err == nil {
 		m.Content = strContent
 		return nil
 	}
-	
+
 	// If not a string, try to unmarshal as array of ContentBlocks
 	var rawBlocks []json.RawMessage
 	if err := json.Unmarshal(raw.Content, &rawBlocks); err != nil {
 		return err
 	}
-	
+
 	blocks := make([]ContentBlock, 0, len(rawBlocks))
 	for _, blockData := range rawBlocks {
 		block, err := unmarshalContentBlock(blockData)
@@ -112,18 +113,23 @@ func (m *UserMessage) UnmarshalJSON(data []byte) error {
 			blocks = append(blocks, block)
 		}
 	}
-	
+
 	m.Content = blocks
 	return nil
 }
 
 // AssistantMessage represents a message from the assistant.
 type AssistantMessage struct {
-	MessageType     string                  `json:"type"`
-	Content         []ContentBlock          `json:"content"`
-	Model           string                  `json:"model"`
-	ParentToolUseID *string                 `json:"parent_tool_use_id,omitempty"`
-	Error           *AssistantMessageError  `json:"error,omitempty"`
+	MessageType     string                 `json:"type"`
+	Content         []ContentBlock         `json:"content"`
+	Model           string                 `json:"model"`
+	ParentToolUseID *string                `json:"parent_tool_use_id,omitempty"`
+	Error           *AssistantMessageError `json:"error,omitempty"`
+	Usage           map[string]any         `json:"usage,omitempty"`
+	MessageID       *string                `json:"message_id,omitempty"`
+	StopReason      *string                `json:"stop_reason,omitempty"`
+	SessionID       *string                `json:"session_id,omitempty"`
+	UUID            *string                `json:"uuid,omitempty"`
 }
 
 // Type returns the message type for AssistantMessage.
@@ -153,16 +159,16 @@ func (m *AssistantMessage) UnmarshalJSON(data []byte) error {
 		Model           string            `json:"model"`
 		ParentToolUseID *string           `json:"parent_tool_use_id,omitempty"`
 	}
-	
+
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	
+
 	// Set the basic fields
 	m.MessageType = MessageTypeAssistant
 	m.Model = raw.Model
 	m.ParentToolUseID = raw.ParentToolUseID
-	
+
 	// Parse each content block based on its type
 	m.Content = make([]ContentBlock, 0, len(raw.Content))
 	for _, blockData := range raw.Content {
@@ -174,7 +180,7 @@ func (m *AssistantMessage) UnmarshalJSON(data []byte) error {
 			m.Content = append(m.Content, block)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -183,11 +189,11 @@ func unmarshalContentBlock(data []byte) (ContentBlock, error) {
 	var meta struct {
 		Type string `json:"type"`
 	}
-	
+
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
 	}
-	
+
 	switch meta.Type {
 	case ContentBlockTypeText:
 		var block TextBlock
@@ -195,28 +201,28 @@ func unmarshalContentBlock(data []byte) (ContentBlock, error) {
 			return nil, err
 		}
 		return &block, nil
-		
+
 	case ContentBlockTypeThinking:
 		var block ThinkingBlock
 		if err := json.Unmarshal(data, &block); err != nil {
 			return nil, err
 		}
 		return &block, nil
-		
+
 	case ContentBlockTypeToolUse:
 		var block ToolUseBlock
 		if err := json.Unmarshal(data, &block); err != nil {
 			return nil, err
 		}
 		return &block, nil
-		
+
 	case ContentBlockTypeToolResult:
 		var block ToolResultBlock
 		if err := json.Unmarshal(data, &block); err != nil {
 			return nil, err
 		}
 		return &block, nil
-		
+
 	default:
 		// Unknown block type, skip it
 		// Note: Python SDK does not include image blocks in ContentBlock types
@@ -253,11 +259,11 @@ func (m *SystemMessage) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	
+
 	if subtype, ok := raw["subtype"].(string); ok {
 		m.Subtype = subtype
 	}
-	
+
 	m.Data = raw
 	m.MessageType = MessageTypeSystem
 	return nil
@@ -265,17 +271,22 @@ func (m *SystemMessage) UnmarshalJSON(data []byte) error {
 
 // ResultMessage represents the final result of a conversation turn.
 type ResultMessage struct {
-	MessageType      string          `json:"type"`
-	Subtype          string          `json:"subtype"`
-	DurationMs       int             `json:"duration_ms"`
-	DurationAPIMs    int             `json:"duration_api_ms"`
-	IsError          bool            `json:"is_error"`
-	NumTurns         int             `json:"num_turns"`
-	SessionID        string          `json:"session_id"`
-	TotalCostUSD     *float64        `json:"total_cost_usd,omitempty"`
-	Usage            *map[string]any `json:"usage,omitempty"`
-	Result           *string         `json:"result,omitempty"`           // Note: Python SDK uses string type
-	StructuredOutput interface{}     `json:"structured_output,omitempty"` // Structured output when using JSON schema
+	MessageType       string          `json:"type"`
+	Subtype           string          `json:"subtype"`
+	DurationMs        int             `json:"duration_ms"`
+	DurationAPIMs     int             `json:"duration_api_ms"`
+	IsError           bool            `json:"is_error"`
+	NumTurns          int             `json:"num_turns"`
+	SessionID         string          `json:"session_id"`
+	StopReason        *string         `json:"stop_reason,omitempty"`
+	TotalCostUSD      *float64        `json:"total_cost_usd,omitempty"`
+	Usage             *map[string]any `json:"usage,omitempty"`
+	Result            *string         `json:"result,omitempty"`            // Note: Python SDK uses string type
+	StructuredOutput  interface{}     `json:"structured_output,omitempty"` // Structured output when using JSON schema
+	ModelUsage        map[string]any  `json:"model_usage,omitempty"`
+	PermissionDenials []any           `json:"permission_denials,omitempty"`
+	Errors            []string        `json:"errors,omitempty"`
+	UUID              *string         `json:"uuid,omitempty"`
 }
 
 // Type returns the message type for ResultMessage.
@@ -459,6 +470,127 @@ type StreamEvent struct {
 	SessionID       string         `json:"session_id"`
 	Event           map[string]any `json:"event"`
 	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"`
+}
+
+// TaskUsage represents usage statistics reported by task events.
+type TaskUsage struct {
+	TotalTokens int `json:"total_tokens"`
+	ToolUses    int `json:"tool_uses"`
+	DurationMS  int `json:"duration_ms"`
+}
+
+// TaskNotificationStatus represents task_notification status values.
+type TaskNotificationStatus string
+
+const (
+	TaskNotificationStatusCompleted TaskNotificationStatus = "completed"
+	TaskNotificationStatusFailed    TaskNotificationStatus = "failed"
+	TaskNotificationStatusStopped   TaskNotificationStatus = "stopped"
+)
+
+// TaskStartedMessage represents a system task_started event.
+type TaskStartedMessage struct {
+	SystemMessage
+	TaskID      string  `json:"task_id"`
+	Description string  `json:"description"`
+	UUID        string  `json:"uuid"`
+	SessionID   string  `json:"session_id"`
+	ToolUseID   *string `json:"tool_use_id,omitempty"`
+	TaskType    *string `json:"task_type,omitempty"`
+}
+
+// TaskProgressMessage represents a system task_progress event.
+type TaskProgressMessage struct {
+	SystemMessage
+	TaskID       string    `json:"task_id"`
+	Description  string    `json:"description"`
+	Usage        TaskUsage `json:"usage"`
+	UUID         string    `json:"uuid"`
+	SessionID    string    `json:"session_id"`
+	ToolUseID    *string   `json:"tool_use_id,omitempty"`
+	LastToolName *string   `json:"last_tool_name,omitempty"`
+}
+
+// TaskNotificationMessage represents a system task_notification event.
+type TaskNotificationMessage struct {
+	SystemMessage
+	TaskID     string                 `json:"task_id"`
+	Status     TaskNotificationStatus `json:"status"`
+	OutputFile string                 `json:"output_file"`
+	Summary    string                 `json:"summary"`
+	UUID       string                 `json:"uuid"`
+	SessionID  string                 `json:"session_id"`
+	ToolUseID  *string                `json:"tool_use_id,omitempty"`
+	Usage      *TaskUsage             `json:"usage,omitempty"`
+}
+
+// RateLimitStatus represents rate limit enforcement state.
+type RateLimitStatus string
+
+const (
+	RateLimitStatusAllowed        RateLimitStatus = "allowed"
+	RateLimitStatusAllowedWarning RateLimitStatus = "allowed_warning"
+	RateLimitStatusRejected       RateLimitStatus = "rejected"
+)
+
+// RateLimitType represents the CLI rate limit window type.
+type RateLimitType string
+
+const (
+	RateLimitTypeFiveHour       RateLimitType = "five_hour"
+	RateLimitTypeSevenDay       RateLimitType = "seven_day"
+	RateLimitTypeSevenDayOpus   RateLimitType = "seven_day_opus"
+	RateLimitTypeSevenDaySonnet RateLimitType = "seven_day_sonnet"
+	RateLimitTypeOverage        RateLimitType = "overage"
+)
+
+// RateLimitInfo represents CLI-emitted rate limit state.
+type RateLimitInfo struct {
+	Status                RateLimitStatus  `json:"status"`
+	ResetsAt              *int64           `json:"resets_at,omitempty"`
+	RateLimitType         *RateLimitType   `json:"rate_limit_type,omitempty"`
+	Utilization           *float64         `json:"utilization,omitempty"`
+	OverageStatus         *RateLimitStatus `json:"overage_status,omitempty"`
+	OverageResetsAt       *int64           `json:"overage_resets_at,omitempty"`
+	OverageDisabledReason *string          `json:"overage_disabled_reason,omitempty"`
+	Raw                   map[string]any   `json:"raw,omitempty"`
+}
+
+// RateLimitEvent represents a top-level rate_limit_event message.
+type RateLimitEvent struct {
+	MessageType   string        `json:"type"`
+	RateLimitInfo RateLimitInfo `json:"rate_limit_info"`
+	UUID          string        `json:"uuid"`
+	SessionID     string        `json:"session_id"`
+}
+
+// Type returns the message type for RateLimitEvent.
+func (m *RateLimitEvent) Type() string {
+	return MessageTypeRateLimitEvent
+}
+
+// MarshalJSON implements custom JSON marshaling for RateLimitEvent.
+func (m *RateLimitEvent) MarshalJSON() ([]byte, error) {
+	type rateLimitEvent RateLimitEvent
+	temp := struct {
+		Type string `json:"type"`
+		*rateLimitEvent
+	}{
+		Type:           MessageTypeRateLimitEvent,
+		rateLimitEvent: (*rateLimitEvent)(m),
+	}
+	return json.Marshal(temp)
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for RateLimitEvent.
+func (m *RateLimitEvent) UnmarshalJSON(data []byte) error {
+	type rateLimitEvent RateLimitEvent
+	temp := (*rateLimitEvent)(m)
+	if err := json.Unmarshal(data, temp); err != nil {
+		return err
+	}
+	m.MessageType = MessageTypeRateLimitEvent
+	return nil
 }
 
 // Type returns the message type for StreamEvent.

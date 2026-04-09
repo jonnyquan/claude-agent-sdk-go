@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -128,25 +129,29 @@ func (t *Transport) Connect(ctx context.Context) error {
 		}
 	}
 
-	// Set up environment: system env → user env → SDK vars (SDK always wins)
-	env := os.Environ()
-
-	// Merge custom environment variables (user-provided, can be overridden by SDK vars)
+	// Match Python SDK environment precedence:
+	// inherited env (minus CLAUDECODE) -> default entrypoint -> user env -> SDK version.
+	envMap := make(map[string]string)
+	for _, kv := range os.Environ() {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 || parts[0] == "CLAUDECODE" {
+			continue
+		}
+		envMap[parts[0]] = parts[1]
+	}
+	envMap["CLAUDE_CODE_ENTRYPOINT"] = t.entrypoint
 	if t.options != nil && t.options.ExtraEnv != nil {
 		for key, value := range t.options.ExtraEnv {
-			env = append(env, fmt.Sprintf("%s=%s", key, value))
+			envMap[key] = value
 		}
 	}
-
-	// SDK identifier vars come last (override all, matching Python SDK behavior)
-	env = append(env, "CLAUDE_CODE_ENTRYPOINT="+t.entrypoint)
 	if t.sdkVersion != "" {
-		env = append(env, fmt.Sprintf("CLAUDE_AGENT_SDK_VERSION=%s", t.sdkVersion))
+		envMap["CLAUDE_AGENT_SDK_VERSION"] = t.sdkVersion
 	}
 
 	// Enable file checkpointing if requested
 	if t.options != nil && t.options.EnableFileCheckpointing {
-		env = append(env, "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true")
+		envMap["CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"] = "true"
 	}
 
 	// Set working directory if specified
@@ -156,10 +161,19 @@ func (t *Transport) Connect(ctx context.Context) error {
 		}
 		t.cmd.Dir = *t.options.Cwd
 		// Set PWD env var to match Python SDK behavior
-		env = append(env, fmt.Sprintf("PWD=%s", *t.options.Cwd))
+		envMap["PWD"] = *t.options.Cwd
 	}
 
 	// Apply environment to command
+	envKeys := make([]string, 0, len(envMap))
+	for key := range envMap {
+		envKeys = append(envKeys, key)
+	}
+	sort.Strings(envKeys)
+	env := make([]string, 0, len(envKeys))
+	for _, key := range envKeys {
+		env = append(env, fmt.Sprintf("%s=%s", key, envMap[key]))
+	}
 	t.cmd.Env = env
 
 	// Set up I/O pipes - always create stdin for streaming mode
@@ -262,7 +276,14 @@ func (t *Transport) Connect(ctx context.Context) error {
 	}
 
 	// Send initialization request to CLI
-	initResult, err := t.controlProtocol.Initialize(agentsDict)
+	var excludeDynamicSections *bool
+	if preset, ok := t.options.SystemPrompt.(shared.SystemPromptPreset); ok {
+		excludeDynamicSections = preset.ExcludeDynamicSections
+	} else if preset, ok := t.options.SystemPrompt.(*shared.SystemPromptPreset); ok && preset != nil {
+		excludeDynamicSections = preset.ExcludeDynamicSections
+	}
+
+	initResult, err := t.controlProtocol.Initialize(agentsDict, excludeDynamicSections)
 	if err != nil {
 		return fmt.Errorf("failed to initialize control protocol: %w", err)
 	}
@@ -392,6 +413,58 @@ func (t *Transport) GetMCPStatus(_ context.Context) (map[string]any, error) {
 	}
 
 	return t.controlProtocol.GetMCPStatus()
+}
+
+// GetContextUsage queries the current context usage from CLI.
+func (t *Transport) GetContextUsage(_ context.Context) (map[string]any, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if !t.connected {
+		return nil, fmt.Errorf("transport not connected")
+	}
+
+	if t.controlProtocol == nil {
+		return nil, fmt.Errorf("control protocol not initialized")
+	}
+
+	return t.controlProtocol.GetContextUsage()
+}
+
+// ReconnectMCPServer reconnects a failed or disconnected MCP server.
+func (t *Transport) ReconnectMCPServer(_ context.Context, serverName string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if !t.connected || t.controlProtocol == nil {
+		return fmt.Errorf("transport not connected")
+	}
+
+	return t.controlProtocol.ReconnectMCPServer(serverName)
+}
+
+// ToggleMCPServer enables or disables an MCP server.
+func (t *Transport) ToggleMCPServer(_ context.Context, serverName string, enabled bool) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if !t.connected || t.controlProtocol == nil {
+		return fmt.Errorf("transport not connected")
+	}
+
+	return t.controlProtocol.ToggleMCPServer(serverName, enabled)
+}
+
+// StopTask stops a running task.
+func (t *Transport) StopTask(_ context.Context, taskID string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if !t.connected || t.controlProtocol == nil {
+		return fmt.Errorf("transport not connected")
+	}
+
+	return t.controlProtocol.StopTask(taskID)
 }
 
 // SetPermissionMode changes the permission mode during conversation.

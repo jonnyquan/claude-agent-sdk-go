@@ -19,6 +19,10 @@ const (
 	PermissionModePlan PermissionMode = "plan"
 	// PermissionModeBypassPermissions bypasses all permission checks.
 	PermissionModeBypassPermissions PermissionMode = "bypassPermissions"
+	// PermissionModeDontAsk automatically accepts when possible without prompting.
+	PermissionModeDontAsk PermissionMode = "dontAsk"
+	// PermissionModeAuto lets the CLI decide the best permission mode automatically.
+	PermissionModeAuto PermissionMode = "auto"
 )
 
 // SettingSource represents a configuration source.
@@ -32,9 +36,21 @@ const (
 
 // SystemPromptPreset represents a preset system prompt configuration.
 type SystemPromptPreset struct {
-	Type   string  `json:"type"`   // Always "preset"
-	Preset string  `json:"preset"` // e.g., "claude_code"
-	Append *string `json:"append,omitempty"`
+	Type                   string  `json:"type"`   // Always "preset"
+	Preset                 string  `json:"preset"` // e.g., "claude_code"
+	Append                 *string `json:"append,omitempty"`
+	ExcludeDynamicSections *bool   `json:"exclude_dynamic_sections,omitempty"`
+}
+
+// SystemPromptFile represents a system prompt file configuration.
+type SystemPromptFile struct {
+	Type string `json:"type"` // Always "file"
+	Path string `json:"path"`
+}
+
+// TaskBudget represents the API-side task budget in tokens.
+type TaskBudget struct {
+	Total int `json:"total"`
 }
 
 // SdkBeta represents SDK beta feature identifiers.
@@ -95,7 +111,7 @@ type Options struct {
 	DisallowedTools []string    `json:"disallowed_tools,omitempty"`
 
 	// System Prompts & Model
-	SystemPrompt       interface{}     `json:"system_prompt,omitempty"` // string, *string, or SystemPromptPreset
+	SystemPrompt       interface{}     `json:"system_prompt,omitempty"` // string, *string, SystemPromptPreset, or SystemPromptFile
 	AppendSystemPrompt *string         `json:"append_system_prompt,omitempty"`
 	Model              *string         `json:"model,omitempty"`
 	FallbackModel      *string         `json:"fallback_model,omitempty"`
@@ -109,13 +125,15 @@ type Options struct {
 	PermissionPromptToolName *string         `json:"permission_prompt_tool_name,omitempty"`
 
 	// Session & State Management
-	ContinueConversation   bool     `json:"continue_conversation,omitempty"`
-	Resume                 *string  `json:"resume,omitempty"`
-	MaxTurns               int      `json:"max_turns,omitempty"`
-	MaxBudgetUSD           *float64 `json:"max_budget_usd,omitempty"` // Budget limit in USD for API costs
-	Settings               *string  `json:"settings,omitempty"`
-	IncludePartialMessages bool     `json:"include_partial_messages,omitempty"`
-	ForkSession            bool     `json:"fork_session,omitempty"`
+	ContinueConversation   bool        `json:"continue_conversation,omitempty"`
+	Resume                 *string     `json:"resume,omitempty"`
+	SessionID              *string     `json:"session_id,omitempty"`
+	MaxTurns               int         `json:"max_turns,omitempty"`
+	MaxBudgetUSD           *float64    `json:"max_budget_usd,omitempty"` // Budget limit in USD for API costs
+	TaskBudget             *TaskBudget `json:"task_budget,omitempty"`
+	Settings               *string     `json:"settings,omitempty"`
+	IncludePartialMessages bool        `json:"include_partial_messages,omitempty"`
+	ForkSession            bool        `json:"fork_session,omitempty"`
 
 	// File System & Context
 	Cwd            *string  `json:"cwd,omitempty"`
@@ -173,10 +191,19 @@ type Options struct {
 
 // AgentDefinition configures a named agent available to the CLI.
 type AgentDefinition struct {
-	Description string   `json:"description"`
-	Prompt      string   `json:"prompt"`
-	Tools       []string `json:"tools,omitempty"`
-	Model       *string  `json:"model,omitempty"`
+	Description     string          `json:"description"`
+	Prompt          string          `json:"prompt"`
+	Tools           []string        `json:"tools,omitempty"`
+	DisallowedTools []string        `json:"disallowedTools,omitempty"`
+	Model           *string         `json:"model,omitempty"`
+	Skills          []string        `json:"skills,omitempty"`
+	Memory          *string         `json:"memory,omitempty"`
+	McpServers      []any           `json:"mcpServers,omitempty"`
+	InitialPrompt   *string         `json:"initialPrompt,omitempty"`
+	MaxTurns        *int            `json:"maxTurns,omitempty"`
+	Background      *bool           `json:"background,omitempty"`
+	Effort          interface{}     `json:"effort,omitempty"`
+	PermissionMode  *PermissionMode `json:"permissionMode,omitempty"`
 }
 
 // PluginType represents the type of plugin.
@@ -330,6 +357,10 @@ func (o *Options) Validate() error {
 	// Validate MaxTurns
 	if o.MaxTurns < 0 {
 		return fmt.Errorf("MaxTurns must be non-negative, got %d", o.MaxTurns)
+	}
+
+	if o.TaskBudget != nil && o.TaskBudget.Total < 0 {
+		return fmt.Errorf("TaskBudget.Total must be non-negative, got %d", o.TaskBudget.Total)
 	}
 
 	// Validate tool conflicts (same tool in both allowed and disallowed)

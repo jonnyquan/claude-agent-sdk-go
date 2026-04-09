@@ -159,6 +159,8 @@ func (hp *HookProcessor) ProcessCanUseTool(
 		Context:     hp.ctx,
 		Signal:      nil, // TODO: Add abort signal support
 		Suggestions: convertPermissionSuggestions(request.PermissionSuggestions),
+		ToolUseID:   request.ToolUseID,
+		AgentID:     request.AgentID,
 	}
 
 	// Call the permission callback

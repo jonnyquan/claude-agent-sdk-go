@@ -14,6 +14,8 @@ type mockTransport struct {
 	msgChan       chan Message
 	errChan       chan error
 	sentMessages  []StreamMessage
+	mcpStatus     map[string]any
+	contextUsage  map[string]any
 	sendErr       error
 	endInputErr   error
 	endInputCalls int
@@ -75,7 +77,29 @@ func (m *mockTransport) RewindFiles(context.Context, string) error {
 }
 
 func (m *mockTransport) GetMCPStatus(context.Context) (map[string]any, error) {
+	if m.mcpStatus != nil {
+		return m.mcpStatus, nil
+	}
 	return map[string]any{}, nil
+}
+
+func (m *mockTransport) GetContextUsage(context.Context) (map[string]any, error) {
+	if m.contextUsage != nil {
+		return m.contextUsage, nil
+	}
+	return map[string]any{}, nil
+}
+
+func (m *mockTransport) ReconnectMCPServer(context.Context, string) error {
+	return nil
+}
+
+func (m *mockTransport) ToggleMCPServer(context.Context, string, bool) error {
+	return nil
+}
+
+func (m *mockTransport) StopTask(context.Context, string) error {
+	return nil
 }
 
 func (m *mockTransport) SetPermissionMode(context.Context, string) error {
@@ -555,6 +579,120 @@ func TestClientQueryStreamRejectsNilMessages(t *testing.T) {
 
 	if err := client.QueryStream(context.Background(), nil); err == nil {
 		t.Fatal("expected error for nil messages stream")
+	}
+}
+
+func TestClientGetMCPStatusDecodesStructuredResponse(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	transport.mcpStatus = map[string]any{
+		"mcpServers": []any{
+			map[string]any{
+				"name":   "docs",
+				"status": "connected",
+				"serverInfo": map[string]any{
+					"name":    "docs",
+					"version": "1.0.0",
+				},
+			},
+		},
+	}
+
+	client := NewClientWithTransport(transport)
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect() returned error: %v", err)
+	}
+
+	status, err := client.GetMCPStatus(context.Background())
+	if err != nil {
+		t.Fatalf("GetMCPStatus() returned error: %v", err)
+	}
+	if len(status.McpServers) != 1 {
+		t.Fatalf("expected 1 MCP server, got %d", len(status.McpServers))
+	}
+	if status.McpServers[0].Name != "docs" || status.McpServers[0].Status != McpServerStatusConnected {
+		t.Fatalf("unexpected MCP status: %#v", status.McpServers[0])
+	}
+	if status.McpServers[0].ServerInfo == nil || status.McpServers[0].ServerInfo.Version != "1.0.0" {
+		t.Fatalf("expected decoded serverInfo, got %#v", status.McpServers[0].ServerInfo)
+	}
+}
+
+func TestClientGetContextUsageDecodesStructuredResponse(t *testing.T) {
+	t.Parallel()
+
+	transport := newMockTransport()
+	transport.contextUsage = map[string]any{
+		"categories": []any{
+			map[string]any{"name": "messages", "tokens": 42, "color": "blue"},
+		},
+		"totalTokens":          42,
+		"maxTokens":            1000,
+		"rawMaxTokens":         2000,
+		"percentage":           4.2,
+		"model":                "claude-sonnet",
+		"isAutoCompactEnabled": true,
+		"memoryFiles": []any{
+			map[string]any{"path": "CLAUDE.md", "type": "project", "tokens": 12},
+		},
+		"mcpTools": []any{
+			map[string]any{"name": "search", "serverName": "ref", "tokens": 7, "isLoaded": true},
+		},
+		"agents": []any{
+			map[string]any{"agentType": "coder", "source": "sdk", "tokens": 3},
+		},
+		"gridRows": []any{},
+	}
+
+	client := NewClientWithTransport(transport)
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect() returned error: %v", err)
+	}
+
+	usage, err := client.GetContextUsage(context.Background())
+	if err != nil {
+		t.Fatalf("GetContextUsage() returned error: %v", err)
+	}
+	if usage.TotalTokens != 42 || usage.Model != "claude-sonnet" {
+		t.Fatalf("unexpected context usage: %#v", usage)
+	}
+	if len(usage.Categories) != 1 || usage.Categories[0].Name != "messages" {
+		t.Fatalf("unexpected context usage categories: %#v", usage.Categories)
+	}
+	if len(usage.MemoryFiles) != 1 || usage.MemoryFiles[0].Path != "CLAUDE.md" {
+		t.Fatalf("unexpected memory files decode: %#v", usage.MemoryFiles)
+	}
+	if len(usage.McpTools) != 1 || usage.McpTools[0].ServerName != "ref" {
+		t.Fatalf("unexpected mcp tools decode: %#v", usage.McpTools)
+	}
+	if len(usage.Agents) != 1 || usage.Agents[0].AgentType != "coder" {
+		t.Fatalf("unexpected agents decode: %#v", usage.Agents)
+	}
+
+	transport.mcpStatus = map[string]any{
+		"mcpServers": []any{
+			map[string]any{
+				"name":   "proxy",
+				"status": "needs-auth",
+				"config": map[string]any{
+					"type": "claudeai-proxy",
+					"url":  "https://claude.ai/proxy",
+					"id":   "proxy-123",
+				},
+			},
+		},
+	}
+
+	status, err := client.GetMCPStatus(context.Background())
+	if err != nil {
+		t.Fatalf("GetMCPStatus() returned error on config decode: %v", err)
+	}
+	if status.McpServers[0].Config == nil || status.McpServers[0].Config.Type != "claudeai-proxy" {
+		t.Fatalf("expected typed config decode, got %#v", status.McpServers[0].Config)
+	}
+	if status.McpServers[0].Config.ID == nil || *status.McpServers[0].Config.ID != "proxy-123" {
+		t.Fatalf("expected proxy id decode, got %#v", status.McpServers[0].Config)
 	}
 }
 

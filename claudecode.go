@@ -13,6 +13,8 @@ import "github.com/jonnyquan/claude-agent-sdk-go/pkg/claudesdk"
 // Client represents a Claude Code client instance.
 // Deprecated: Use claudesdk.Client instead.
 type Client = claudesdk.Client
+type ClaudeSDKClient = claudesdk.ClaudeSDKClient
+type ClaudeSDKError = claudesdk.ClaudeSDKError
 
 // MessageIterator represents an iterator over messages from Claude.
 // Deprecated: Use claudesdk.MessageIterator instead.
@@ -52,10 +54,16 @@ type HookJSONOutput = claudesdk.HookJSONOutput
 type HookMatcher = claudesdk.HookMatcher
 type HookEvent = claudesdk.HookEvent
 type HookCallback = claudesdk.HookCallback
+type PreToolUseHookInput = claudesdk.PreToolUseHookInput
+type PostToolUseHookInput = claudesdk.PostToolUseHookInput
+type PostToolUseFailureHookInput = claudesdk.PostToolUseFailureHookInput
+type PermissionRequestHookInput = claudesdk.PermissionRequestHookInput
 
 // Plugin types
 // Deprecated: Use claudesdk types instead.
+type ClaudeAgentOptions = claudesdk.ClaudeAgentOptions
 type PluginConfig = claudesdk.PluginConfig
+type SdkPluginConfig = claudesdk.SdkPluginConfig
 type PluginType = claudesdk.PluginType
 
 // Sandbox types
@@ -72,6 +80,36 @@ type ToolContent = claudesdk.ToolContent
 type ToolDef = claudesdk.ToolDef
 type ContentBlock = claudesdk.ContentBlock
 type SystemMessage = claudesdk.SystemMessage
+type AudioContent = claudesdk.AudioContent
+type ResourceLinkContent = claudesdk.ResourceLinkContent
+type ResourceContent = claudesdk.ResourceContent
+type TaskStartedMessage = claudesdk.TaskStartedMessage
+type TaskProgressMessage = claudesdk.TaskProgressMessage
+type TaskNotificationMessage = claudesdk.TaskNotificationMessage
+type TaskNotificationStatus = claudesdk.TaskNotificationStatus
+type TaskUsage = claudesdk.TaskUsage
+type RateLimitStatus = claudesdk.RateLimitStatus
+type RateLimitType = claudesdk.RateLimitType
+type RateLimitInfo = claudesdk.RateLimitInfo
+type RateLimitEvent = claudesdk.RateLimitEvent
+type ToolAnnotations = claudesdk.ToolAnnotations
+type SdkMcpTool = claudesdk.SdkMcpTool
+type McpToolAnnotations = claudesdk.McpToolAnnotations
+type McpToolInfo = claudesdk.McpToolInfo
+type McpServerInfo = claudesdk.McpServerInfo
+type McpServerConnectionStatus = claudesdk.McpServerConnectionStatus
+type McpServerStatusConfig = claudesdk.McpServerStatusConfig
+type McpServerStatus = claudesdk.McpServerStatus
+type McpStatusResponse = claudesdk.McpStatusResponse
+type ContextUsageCategory = claudesdk.ContextUsageCategory
+type ContextUsageMemoryFile = claudesdk.ContextUsageMemoryFile
+type ContextUsageMcpTool = claudesdk.ContextUsageMcpTool
+type ContextUsageAgent = claudesdk.ContextUsageAgent
+type ContextUsageNamedTokens = claudesdk.ContextUsageNamedTokens
+type ContextUsageResponse = claudesdk.ContextUsageResponse
+type SDKSessionInfo = claudesdk.SDKSessionInfo
+type SessionMessage = claudesdk.SessionMessage
+type ForkSessionResult = claudesdk.ForkSessionResult
 
 // Permission types
 // Deprecated: Use claudesdk types instead.
@@ -86,6 +124,9 @@ type McpServerConfig = claudesdk.McpServerConfig
 type SdkBeta = claudesdk.SdkBeta
 type ToolsPreset = claudesdk.ToolsPreset
 type ToolsOption = claudesdk.ToolsOption
+type ThinkingConfigAdaptive = claudesdk.ThinkingConfigAdaptive
+type ThinkingConfigEnabled = claudesdk.ThinkingConfigEnabled
+type ThinkingConfigDisabled = claudesdk.ThinkingConfigDisabled
 
 // Constants
 // Deprecated: Use claudesdk constants instead.
@@ -114,6 +155,24 @@ const (
 	PermissionModeAcceptEdits       = claudesdk.PermissionModeAcceptEdits
 	PermissionModePlan              = claudesdk.PermissionModePlan
 	PermissionModeBypassPermissions = claudesdk.PermissionModeBypassPermissions
+	PermissionModeDontAsk           = claudesdk.PermissionModeDontAsk
+	PermissionModeAuto              = claudesdk.PermissionModeAuto
+	McpServerStatusConnected        = claudesdk.McpServerStatusConnected
+	McpServerStatusFailed           = claudesdk.McpServerStatusFailed
+	McpServerStatusNeedsAuth        = claudesdk.McpServerStatusNeedsAuth
+	McpServerStatusPending          = claudesdk.McpServerStatusPending
+	McpServerStatusDisabled         = claudesdk.McpServerStatusDisabled
+	TaskNotificationStatusCompleted = claudesdk.TaskNotificationStatusCompleted
+	TaskNotificationStatusFailed    = claudesdk.TaskNotificationStatusFailed
+	TaskNotificationStatusStopped   = claudesdk.TaskNotificationStatusStopped
+	RateLimitStatusAllowed          = claudesdk.RateLimitStatusAllowed
+	RateLimitStatusAllowedWarning   = claudesdk.RateLimitStatusAllowedWarning
+	RateLimitStatusRejected         = claudesdk.RateLimitStatusRejected
+	RateLimitTypeFiveHour           = claudesdk.RateLimitTypeFiveHour
+	RateLimitTypeSevenDay           = claudesdk.RateLimitTypeSevenDay
+	RateLimitTypeSevenDayOpus       = claudesdk.RateLimitTypeSevenDayOpus
+	RateLimitTypeSevenDaySonnet     = claudesdk.RateLimitTypeSevenDaySonnet
+	RateLimitTypeOverage            = claudesdk.RateLimitTypeOverage
 
 	// Beta features
 	SdkBetaContext1M = claudesdk.SdkBetaContext1M
@@ -217,6 +276,18 @@ var WithBetas = claudesdk.WithBetas
 // Deprecated: Use claudesdk.WithEnableFileCheckpointing instead.
 var WithEnableFileCheckpointing = claudesdk.WithEnableFileCheckpointing
 
+// WithSystemPromptFile sets the system prompt from a file.
+// Deprecated: Use claudesdk.WithSystemPromptFile instead.
+var WithSystemPromptFile = claudesdk.WithSystemPromptFile
+
+// WithSessionID sets a specific session_id.
+// Deprecated: Use claudesdk.WithSessionID instead.
+var WithSessionID = claudesdk.WithSessionID
+
+// WithTaskBudget sets a per-task budget.
+// Deprecated: Use claudesdk.WithTaskBudget instead.
+var WithTaskBudget = claudesdk.WithTaskBudget
+
 // Additional utility functions
 
 // NewOptions creates Options with default values.
@@ -235,6 +306,22 @@ var NewTextContent = claudesdk.NewTextContent
 // Deprecated: Use claudesdk.NewImageContent instead.
 var NewImageContent = claudesdk.NewImageContent
 
+// NewAudioContent creates new audio content.
+// Deprecated: Use claudesdk.NewAudioContent instead.
+var NewAudioContent = claudesdk.NewAudioContent
+
+// NewResourceLinkContent creates a resource-link content block.
+// Deprecated: Use claudesdk.NewResourceLinkContent instead.
+var NewResourceLinkContent = claudesdk.NewResourceLinkContent
+
+// NewResourceTextContent creates an embedded text resource block.
+// Deprecated: Use claudesdk.NewResourceTextContent instead.
+var NewResourceTextContent = claudesdk.NewResourceTextContent
+
+// NewResourceBlobContent creates an embedded binary resource block.
+// Deprecated: Use claudesdk.NewResourceBlobContent instead.
+var NewResourceBlobContent = claudesdk.NewResourceBlobContent
+
 // Tool creates a new tool definition.
 // Deprecated: Use claudesdk.Tool instead.
 var Tool = claudesdk.Tool
@@ -242,6 +329,13 @@ var Tool = claudesdk.Tool
 // ToolWithAnnotations creates a tool definition with MCP annotations.
 // Deprecated: Use claudesdk.ToolWithAnnotations instead.
 var ToolWithAnnotations = claudesdk.ToolWithAnnotations
+var ListSessions = claudesdk.ListSessions
+var GetSessionInfo = claudesdk.GetSessionInfo
+var GetSessionMessages = claudesdk.GetSessionMessages
+var RenameSession = claudesdk.RenameSession
+var TagSession = claudesdk.TagSession
+var DeleteSession = claudesdk.DeleteSession
+var ForkSession = claudesdk.ForkSession
 
 // Hook utility functions
 // Deprecated: Use claudesdk functions instead.

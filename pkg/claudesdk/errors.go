@@ -6,6 +6,7 @@ import (
 
 // SDKError represents the base interface for all SDK errors.
 type SDKError = shared.SDKError
+type ClaudeSDKError = shared.SDKError
 
 // BaseError provides common error functionality across the SDK.
 type BaseError = shared.BaseError

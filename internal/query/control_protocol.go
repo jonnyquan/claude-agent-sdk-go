@@ -66,7 +66,7 @@ func NewControlProtocol(
 }
 
 // Initialize sends initialization request to CLI.
-func (cp *ControlProtocol) Initialize(agents map[string]map[string]any) (map[string]any, error) {
+func (cp *ControlProtocol) Initialize(agents map[string]map[string]any, excludeDynamicSections *bool) (map[string]any, error) {
 	// Build hooks configuration
 	var hooksConfig map[string]any
 	if cp.hookProcessor != nil {
@@ -88,6 +88,9 @@ func (cp *ControlProtocol) Initialize(agents map[string]map[string]any) (map[str
 	}
 	if agents != nil && len(agents) > 0 {
 		request["agents"] = agents
+	}
+	if excludeDynamicSections != nil {
+		request["excludeDynamicSections"] = *excludeDynamicSections
 	}
 
 	// Send and wait for response
@@ -129,6 +132,45 @@ func (cp *ControlProtocol) GetMCPStatus() (map[string]any, error) {
 		"subtype": shared.ControlSubtypeMCPStatus,
 	}
 	return cp.sendControlRequest(request, 60*time.Second)
+}
+
+// GetContextUsage queries the current context usage from CLI.
+func (cp *ControlProtocol) GetContextUsage() (map[string]any, error) {
+	request := map[string]any{
+		"subtype": shared.ControlSubtypeGetContextUsage,
+	}
+	return cp.sendControlRequest(request, 60*time.Second)
+}
+
+// ReconnectMCPServer reconnects a failed or disconnected MCP server.
+func (cp *ControlProtocol) ReconnectMCPServer(serverName string) error {
+	request := map[string]any{
+		"subtype":    shared.ControlSubtypeMCPReconnect,
+		"serverName": serverName,
+	}
+	_, err := cp.sendControlRequest(request, 60*time.Second)
+	return err
+}
+
+// ToggleMCPServer enables or disables an MCP server.
+func (cp *ControlProtocol) ToggleMCPServer(serverName string, enabled bool) error {
+	request := map[string]any{
+		"subtype":    shared.ControlSubtypeMCPToggle,
+		"serverName": serverName,
+		"enabled":    enabled,
+	}
+	_, err := cp.sendControlRequest(request, 60*time.Second)
+	return err
+}
+
+// StopTask stops a running task.
+func (cp *ControlProtocol) StopTask(taskID string) error {
+	request := map[string]any{
+		"subtype": shared.ControlSubtypeStopTask,
+		"task_id": taskID,
+	}
+	_, err := cp.sendControlRequest(request, 60*time.Second)
+	return err
 }
 
 // SetPermissionMode changes the permission mode during conversation.
@@ -312,6 +354,12 @@ func (cp *ControlProtocol) handleCanUseTool(data map[string]any) (map[string]any
 
 	if suggestions, ok := data["permission_suggestions"].([]any); ok {
 		request.PermissionSuggestions = suggestions
+	}
+	if toolUseID, ok := data["tool_use_id"].(string); ok {
+		request.ToolUseID = &toolUseID
+	}
+	if agentID, ok := data["agent_id"].(string); ok {
+		request.AgentID = &agentID
 	}
 
 	// Process through hook processor
