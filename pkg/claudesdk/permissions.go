@@ -40,8 +40,9 @@ type CanUseTool = shared.CanUseToolCallback
 
 // Helper functions
 var (
-	NewPermissionAllow  = shared.NewPermissionAllow
-	NewPermissionDeny   = shared.NewPermissionDeny
-	NewPermissionRule   = shared.NewPermissionRule
-	NewPermissionUpdate = shared.NewPermissionUpdate
+	NewPermissionAllow       = shared.NewPermissionAllow
+	NewPermissionDeny        = shared.NewPermissionDeny
+	NewPermissionRule        = shared.NewPermissionRule
+	NewPermissionUpdate      = shared.NewPermissionUpdate
+	PermissionUpdateFromDict = shared.PermissionUpdateFromDict
 )

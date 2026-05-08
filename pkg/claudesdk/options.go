@@ -50,6 +50,9 @@ type ThinkingConfigDisabled = shared.ThinkingConfig
 // EffortLevel controls the effort/depth of thinking.
 type EffortLevel = shared.EffortLevel
 
+// ThinkingDisplay controls whether thinking text is returned summarized or omitted.
+type ThinkingDisplay = shared.ThinkingDisplay
+
 // PluginType defines the type of plugin.
 type PluginType = shared.PluginType
 
@@ -93,7 +96,11 @@ const (
 	EffortLow    = shared.EffortLow
 	EffortMedium = shared.EffortMedium
 	EffortHigh   = shared.EffortHigh
+	EffortXHigh  = shared.EffortXHigh
 	EffortMax    = shared.EffortMax
+	// Thinking display
+	ThinkingDisplaySummarized = shared.ThinkingDisplaySummarized
+	ThinkingDisplayOmitted    = shared.ThinkingDisplayOmitted
 	// Setting sources
 	SettingSourceUser    = shared.SettingSourceUser
 	SettingSourceProject = shared.SettingSourceProject
@@ -535,6 +542,70 @@ func WithTransport(_ Transport) Option {
 		}
 		marker := customTransportMarker
 		o.ExtraArgs["__transport_marker__"] = &marker
+	}
+}
+
+// SkillsOption is the value type for Options.Skills.
+type SkillsOption = shared.SkillsOption
+
+// SkillsAll enables every discovered skill on the session.
+func SkillsAll() *SkillsOption { return shared.SkillsAll() }
+
+// SkillsList enables only the named skills.
+func SkillsList(names ...string) *SkillsOption { return shared.SkillsList(names...) }
+
+// SkillsNone suppresses every skill from the listing.
+func SkillsNone() *SkillsOption { return shared.SkillsNone() }
+
+// WithSkills enables skills for the main session.
+//
+// Pass SkillsAll() for every discovered skill, SkillsList(...) for an
+// explicit allowlist, or SkillsNone() to suppress every skill.
+//
+// This is the single place to turn skills on; you do not need to add "Skill"
+// to AllowedTools or set SettingSources yourself — the SDK does both when
+// this is set.
+func WithSkills(skills *SkillsOption) Option {
+	return func(o *Options) {
+		o.Skills = skills
+	}
+}
+
+// WithIncludeHookEvents emits hook lifecycle events into the message stream.
+func WithIncludeHookEvents(enabled bool) Option {
+	return func(o *Options) {
+		o.IncludeHookEvents = enabled
+	}
+}
+
+// WithStrictMcpConfig restricts MCP servers to those passed via Options.McpServers,
+// ignoring all other MCP configurations. Maps to --strict-mcp-config.
+func WithStrictMcpConfig(strict bool) Option {
+	return func(o *Options) {
+		o.StrictMcpConfig = strict
+	}
+}
+
+// WithSessionStore sets the SessionStore that mirrors transcripts to external storage.
+func WithSessionStore(store SessionStore) Option {
+	return func(o *Options) {
+		o.SessionStore = store
+	}
+}
+
+// WithSessionStoreFlush controls when transcript-mirror entries are flushed.
+// "" / SessionStoreFlushBatched flushes once per turn or on overflow;
+// SessionStoreFlushEager flushes after every frame for near-real-time delivery.
+func WithSessionStoreFlush(mode SessionStoreFlushMode) Option {
+	return func(o *Options) {
+		o.SessionStoreFlush = mode
+	}
+}
+
+// WithLoadTimeoutMs sets the timeout for SessionStore Load/ListSubkeys calls during resume.
+func WithLoadTimeoutMs(ms int) Option {
+	return func(o *Options) {
+		o.LoadTimeoutMs = ms
 	}
 }
 

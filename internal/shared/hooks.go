@@ -130,8 +130,11 @@ type HookInput = any
 
 // PreToolUseHookSpecificOutput represents hook-specific output for PreToolUse events.
 type PreToolUseHookSpecificOutput struct {
-	HookEventName            string         `json:"hookEventName"`
-	PermissionDecision       string         `json:"permissionDecision,omitempty"` // "allow", "deny", or "ask"
+	HookEventName string `json:"hookEventName"`
+	// PermissionDecision: "allow", "deny", "ask", or "defer".
+	// "defer" stops the run and records the deferred call on
+	// ResultMessage.DeferredToolUse so the caller can resume.
+	PermissionDecision       string         `json:"permissionDecision,omitempty"`
 	PermissionDecisionReason string         `json:"permissionDecisionReason,omitempty"`
 	UpdatedInput             map[string]any `json:"updatedInput,omitempty"`
 	AdditionalContext        string         `json:"additionalContext,omitempty"`
@@ -139,8 +142,15 @@ type PreToolUseHookSpecificOutput struct {
 
 // PostToolUseHookSpecificOutput represents hook-specific output for PostToolUse events.
 type PostToolUseHookSpecificOutput struct {
-	HookEventName        string      `json:"hookEventName"`
-	AdditionalContext    string      `json:"additionalContext,omitempty"`
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext,omitempty"`
+	// UpdatedToolOutput replaces the tool output before it is sent to the model.
+	// For built-in tools the value must match the tool's output schema (e.g.
+	// {"stdout":..., "stderr":..., "interrupted":...} for Bash); a mismatched
+	// shape is rejected and the original output is kept.
+	UpdatedToolOutput interface{} `json:"updatedToolOutput,omitempty"`
+	// UpdatedMCPToolOutput replaces the output for MCP tools only.
+	// Prefer UpdatedToolOutput, which works for all tools.
 	UpdatedMCPToolOutput interface{} `json:"updatedMCPToolOutput,omitempty"`
 }
 
@@ -238,6 +248,9 @@ const (
 	PermissionDecisionAllow = "allow"
 	PermissionDecisionDeny  = "deny"
 	PermissionDecisionAsk   = "ask"
+	// PermissionDecisionDefer stops the run and records the deferred call
+	// on ResultMessage.DeferredToolUse so the caller can resume.
+	PermissionDecisionDefer = "defer"
 )
 
 // Helper functions to create hook outputs

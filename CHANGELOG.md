@@ -1,5 +1,139 @@
 # Changelog
 
+## 0.1.77
+
+### New Features
+
+Mass parity sync with Python SDK 0.1.77 (skipping releases 0.1.20–0.1.76 in
+the changelog; the highlights below cover the cumulative additions). The Go
+SDK now tracks the same shape as Python for types, options, the wire
+protocol, and the SessionStore subsystem.
+
+#### Types and content blocks
+
+- **ServerToolUseBlock / ServerToolResultBlock**: Surface server-executed
+  tool calls (advisor, web_search, web_fetch, code_execution, etc.) and their
+  results that were previously dropped.
+- **HookEventMessage**: Routed `system/hook_started` and `system/hook_response`
+  frames to a dedicated message type; emitted when `IncludeHookEvents` is true.
+- **MirrorErrorMessage**: SDK-synthesized when a `SessionStore.Append` call
+  fails so consumers can detect mirror gaps without aborting the session.
+- **DeferredToolUse on ResultMessage**: Carries the deferred tool call when a
+  PreToolUse hook returns `permissionDecision: "defer"`.
+- **APIErrorStatus on ResultMessage**: HTTP status (e.g. 429, 500, 529) of a
+  failing API call, safe to log.
+- **ServerToolName constants**: Discriminator constants for known server tool
+  names.
+
+#### Options
+
+- **Skills option**: New `Options.Skills` with `SkillsAll() / SkillsList(...) /
+  SkillsNone()` constructors. Auto-injects `Skill` / `Skill(name)` into
+  `AllowedTools` and defaults `SettingSources` to `[user, project]` when set.
+- **IncludeHookEvents**: Enables hook lifecycle events in the message stream.
+- **StrictMcpConfig**: Restricts MCP servers to those passed in `McpServers`,
+  ignoring project / user / global / plugin sources.
+- **SessionStore + SessionStoreFlush + LoadTimeoutMs**: Mirror transcripts to
+  an external store; flush eagerly or batched; control resume Load timeouts.
+- **ThinkingDisplay**: New `summarized` / `omitted` setting on
+  `ThinkingConfig` (forwarded as `--thinking-display`).
+- **EffortXHigh**: New Opus 4.7-only effort level (falls back to `high`
+  elsewhere).
+- **SandboxNetworkConfig**: Added `AllowedDomains`, `DeniedDomains`,
+  `AllowManagedDomainsOnly`, `AllowMachLookup` for sandbox network policy.
+- **SessionID**: Forwarded to the CLI as `--session-id` for caller-supplied
+  session UUIDs.
+
+#### Permissions
+
+- **ToolPermissionContext enrichment**: New `BlockedPath`, `DecisionReason`,
+  `Title`, `DisplayName`, `Description` fields propagated from
+  `permission_request` control messages.
+- **PermissionUpdateFromDict**: Constructs a `PermissionUpdate` from the
+  control protocol dict format so suggestions can be inspected and echoed
+  back without losing structural fidelity.
+- **PermissionDecisionDefer**: New `"defer"` decision constant.
+- **PostToolUseHookSpecificOutput.UpdatedToolOutput**: Replaces the tool
+  output for any tool (not just MCP).
+
+#### SessionStore subsystem
+
+- **SessionStore protocol**: New `SessionStore` interface, `SessionKey`,
+  `SessionStoreEntry`, `SessionStoreListEntry`, `SessionSummaryEntry`,
+  `SessionListSubkeysKey` types, and `UnimplementedSessionStore` for the
+  optional methods.
+- **InMemorySessionStore**: Reference adapter for testing and development.
+- **FoldSessionSummary / SummaryEntryToSDKInfo**: Incremental summary
+  derivation so adapters can maintain `ListSessionSummaries` cheaply.
+- **ProjectKeyForDirectory / FilePathToSessionKey**: Helpers for mapping
+  on-disk transcripts to store keys.
+- **\*FromStore async helpers**: `ListSessionsFromStore`,
+  `GetSessionInfoFromStore`, `GetSessionMessagesFromStore`,
+  `ListSubagentsFromStore`, `GetSubagentMessagesFromStore`.
+- **\*ViaStore mutation helpers**: `RenameSessionViaStore`,
+  `TagSessionViaStore`, `DeleteSessionViaStore`.
+- **Subagent transcript helpers**: `ListSubagents` and `GetSubagentMessages`
+  for reading subagent transcripts from disk.
+- **Cascading `DeleteSession`**: Now removes the sibling
+  `<sessionID>/subagents/` directory alongside the JSONL file.
+
+#### Transport / Protocol
+
+- **Skills sent on initialize**: `InitializeWithSkills` forwards an explicit
+  skill allowlist so the CLI can filter which skills are loaded.
+- **`--include-hook-events`, `--strict-mcp-config`, `--session-mirror`,
+  `--thinking-display`, `--session-id`**: New CLI flags wired into the
+  command builder.
+- **`--setting-sources=` empty list**: Now emitted as a single argument so
+  the CLI correctly disables all filesystem settings (Python parity).
+- **Atexit cleanup**: Live CLI subprocesses are tracked in a global set and
+  receive SIGTERM when the parent receives SIGINT/SIGTERM, preventing
+  orphans (Python SDK parity).
+- **Error result text replacement**: When the CLI emits a result with
+  `is_error=true` and exits non-zero, `ProcessError.Error()` now includes the
+  structured error text (e.g. "Reached maximum number of turns") instead of
+  the bare exit code.
+- **transcript_mirror frame routing**: Subprocess and alt transport now peel
+  `transcript_mirror` frames off stdout (they are not yielded to consumers)
+  and hand them to the configured `TranscriptMirrorBatcher`. Result messages
+  trigger an explicit flush before being yielded so consumers can rely on
+  the SessionStore being up to date for each turn.
+- **OTEL trace context**: TRACEPARENT/TRACESTATE in the parent process env
+  are inherited naturally by the subprocess. Callers using OTEL libraries
+  that do not write the active span's context to env vars can populate
+  `Options.ExtraEnv` explicitly per-query.
+
+#### Client / Query orchestration
+
+- `Client.Connect` and `Query` now run the full SessionStore lifecycle:
+  `ValidateSessionStoreOptions` → `MaterializeResumeSession` →
+  `ApplyMaterializedOptions` → `NewTranscriptMirrorBatcher` →
+  transport.SetMirrorBatcher / SetMaterializedCleanup → `Connect`. Skipped
+  when a custom transport is supplied.
+- `MaterializedResume.Cleanup` is invoked automatically on transport `Close`
+  and on `Connect` failure paths so the temp credentials directory does not
+  leak.
+
+#### Testing helpers
+
+- **`RunSessionStoreConformance`**: 14-contract behavioral test harness for
+  custom `SessionStore` adapters. Mirrors Python SDK's
+  `claude_agent_sdk.testing.run_session_store_conformance`. Exposed as
+  `claudesdk.RunSessionStoreConformance(t, factory, claudesdk.ConformanceOptions{})`
+  with optional skip-list for adapters that don't implement
+  `ListSessions` / `ListSessionSummaries` / `Delete` / `ListSubkeys`.
+- Reference adapter `InMemorySessionStore` passes all 14 contracts.
+
+#### Public API additions
+
+- Re-exports for `ThinkingDisplay`, `ImportSessionOptions`,
+  `RunSessionStoreConformance`, `ConformanceOptions` in `pkg/claudesdk`.
+
+### Internal/Other Changes
+
+- Updated bundled Claude CLI to version 2.1.133 (was 2.1.4).
+- Updated SDK version to 0.1.77 (was 0.1.19).
+
 ## 0.1.19
 
 ### Internal/Other Changes

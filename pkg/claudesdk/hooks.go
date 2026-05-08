@@ -59,6 +59,9 @@ const (
 	PermissionDecisionAllow = shared.PermissionDecisionAllow
 	PermissionDecisionDeny  = shared.PermissionDecisionDeny
 	PermissionDecisionAsk   = shared.PermissionDecisionAsk
+	// PermissionDecisionDefer stops the run and records the deferred call
+	// on ResultMessage.DeferredToolUse so the caller can resume.
+	PermissionDecisionDefer = shared.PermissionDecisionDefer
 )
 
 // Helper functions

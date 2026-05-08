@@ -70,6 +70,21 @@ type Transport struct {
 	firstResultReceived chan struct{}
 	firstResultOnce     sync.Once
 	streamCloseTimeout  time.Duration
+
+	// lastErrorResultText holds the result.errors text when the most recent
+	// message was an error result. Used to replace the generic "exit code 1"
+	// ProcessError surfaced after the CLI prints a structured error result
+	// and exits non-zero (matches Python SDK Query._last_error_result_text).
+	lastErrorMu         sync.Mutex
+	lastErrorResultText *string
+
+	// mirrorBatcher receives transcript_mirror frames when SessionStore is
+	// configured. nil when no store is set.
+	mirrorBatcher shared.MirrorBatcher
+
+	// materialized holds the resume-materialized config dir (if any). Its
+	// Cleanup is invoked in Close.
+	materializedCleanup func() error
 }
 
 // New creates a new subprocess transport.
@@ -113,6 +128,42 @@ func getStreamCloseTimeout() time.Duration {
 		return 60 * time.Second
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+// SetMirrorBatcher attaches a TranscriptMirrorBatcher (or compatible type)
+// that receives transcript_mirror stdout frames. Call this BEFORE Connect so
+// the read loop sees the batcher when frames arrive. Pass nil to detach.
+func (t *Transport) SetMirrorBatcher(b shared.MirrorBatcher) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.mirrorBatcher = b
+}
+
+// SetMaterializedCleanup registers a cleanup callback (typically the Cleanup
+// returned by sessions.MaterializeResumeSession) that Close will invoke
+// after the subprocess exits.
+func (t *Transport) SetMaterializedCleanup(cleanup func() error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.materializedCleanup = cleanup
+}
+
+// convertMirrorEntries converts the parsed `entries` field of a
+// transcript_mirror frame into a slice of SessionStoreEntry.
+func convertMirrorEntries(raw any) []shared.SessionStoreEntry {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]shared.SessionStoreEntry, 0, len(arr))
+	for _, item := range arr {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // IsConnected returns whether the transport is currently connected.
@@ -198,6 +249,8 @@ func (t *Transport) Connect(ctx context.Context) error {
 			err,
 		)
 	}
+	// Track live child for parent-exit cleanup (mirrors Python's atexit).
+	registerActiveChild(t.cmd)
 
 	// Set up context for goroutine management
 	t.ctx, t.cancel = context.WithCancel(ctx)
@@ -275,7 +328,7 @@ func (t *Transport) Connect(ctx context.Context) error {
 		excludeDynamicSections = preset.ExcludeDynamicSections
 	}
 
-	initResult, err := t.controlProtocol.Initialize(agentsDict, excludeDynamicSections)
+	initResult, err := t.controlProtocol.InitializeWithSkills(agentsDict, excludeDynamicSections, t.options.Skills)
 	if err != nil {
 		return fmt.Errorf("failed to initialize control protocol: %w", err)
 	}
@@ -444,6 +497,15 @@ func (t *Transport) Close() error {
 
 	t.connected = false
 
+	// Final-flush mirror entries before tearing down so an early break/return
+	// does not drop the current turn.
+	if t.mirrorBatcher != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		t.mirrorBatcher.Close(closeCtx)
+		cancel()
+		t.mirrorBatcher = nil
+	}
+
 	// Clean up control protocol
 	if t.controlProtocol != nil {
 		_ = t.controlProtocol.Close()
@@ -460,6 +522,12 @@ func (t *Transport) Close() error {
 	if t.stdin != nil {
 		_ = t.stdin.Close()
 		t.stdin = nil
+	}
+
+	// Run materialized resume cleanup (best-effort).
+	if t.materializedCleanup != nil {
+		_ = t.materializedCleanup()
+		t.materializedCleanup = nil
 	}
 
 	// Wait for goroutines to finish with timeout
@@ -532,15 +600,16 @@ func (t *Transport) handleStdout() {
 			continue
 		}
 
-		// Check if this is a control message and route accordingly
-		if t.controlProtocol != nil {
-			// Try to parse as JSON to check message type
-			var rawMsg map[string]any
-			if err := json.Unmarshal([]byte(line), &rawMsg); err == nil {
-				if msgType, ok := rawMsg["type"].(string); ok {
-					// Route control messages to control protocol
-					switch msgType {
-					case "control_request", "control_response", "control_cancel_request":
+		// Check if this is a control message or transcript_mirror frame and
+		// route accordingly. We do a single rawMsg parse here that's reused
+		// by both the control routing and the mirror routing.
+		var rawMsg map[string]any
+		_ = json.Unmarshal([]byte(line), &rawMsg)
+		if rawMsg != nil {
+			if msgType, ok := rawMsg["type"].(string); ok {
+				switch msgType {
+				case "control_request", "control_response", "control_cancel_request":
+					if t.controlProtocol != nil {
 						if err := t.controlProtocol.HandleIncomingMessage(msgType, []byte(line)); err != nil {
 							// Log error but don't stop processing
 							select {
@@ -549,8 +618,17 @@ func (t *Transport) handleStdout() {
 								return
 							}
 						}
-						continue // Don't send control messages to regular message channel
 					}
+					continue
+				case "transcript_mirror":
+					// SessionStore write path: peel mirror frames off stdout
+					// and hand to the batcher; do NOT yield to consumers.
+					if t.mirrorBatcher != nil {
+						filePath, _ := rawMsg["filePath"].(string)
+						entries := convertMirrorEntries(rawMsg["entries"])
+						t.mirrorBatcher.Enqueue(filePath, entries)
+					}
+					continue
 				}
 			}
 		}
@@ -569,11 +647,37 @@ func (t *Transport) handleStdout() {
 		// Send parsed messages
 		for _, msg := range messages {
 			if msg != nil {
-				// Track results for proper stream closure
-				if _, isResult := msg.(*shared.ResultMessage); isResult {
+				// Track results for proper stream closure and error-text replacement.
+				if rm, isResult := msg.(*shared.ResultMessage); isResult {
+					// Flush pending transcript mirror entries before yielding
+					// the result so consumers observing it can rely on the
+					// SessionStore being up to date for this turn.
+					if t.mirrorBatcher != nil {
+						t.mirrorBatcher.Flush(t.ctx)
+					}
 					t.firstResultOnce.Do(func() {
 						close(t.firstResultReceived)
 					})
+					t.lastErrorMu.Lock()
+					if rm.IsError {
+						errText := strings.Join(rm.Errors, "; ")
+						if errText == "" {
+							errText = rm.Subtype
+						}
+						if errText == "" {
+							errText = "unknown error"
+						}
+						t.lastErrorResultText = &errText
+					} else {
+						t.lastErrorResultText = nil
+					}
+					t.lastErrorMu.Unlock()
+				} else if sysMsg, isSys := msg.(*shared.SystemMessage); !isSys || sysMsg.Subtype != "session_state_changed" {
+					// Anything other than the post-turn session_state_changed
+					// marker means the conversation moved on; reset.
+					t.lastErrorMu.Lock()
+					t.lastErrorResultText = nil
+					t.lastErrorMu.Unlock()
 				}
 
 				select {
@@ -677,6 +781,12 @@ func (t *Transport) cleanup() {
 	}
 
 	// Note: stderr is now handled via pipe, no cleanup needed
+
+	// Drop from the parent-exit cleanup registry — child has exited or
+	// will be terminated synchronously below.
+	if t.cmd != nil {
+		unregisterActiveChild(t.cmd)
+	}
 
 	// Reset state
 	t.cmd = nil

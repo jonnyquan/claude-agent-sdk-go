@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -501,8 +502,14 @@ func TestBuildJSONSchema(t *testing.T) {
 
 			if expectedRequired, ok := tt.expected["required"].([]string); ok {
 				gotRequired, _ := result["required"].([]string)
-				if strings.Join(gotRequired, ",") != strings.Join(expectedRequired, ",") {
-					t.Errorf("Expected required=%v, got %v", expectedRequired, gotRequired)
+				// `required` is a set in JSON Schema — compare order-insensitive
+				// so map iteration order doesn't flake the test.
+				gotSorted := append([]string(nil), gotRequired...)
+				expSorted := append([]string(nil), expectedRequired...)
+				sort.Strings(gotSorted)
+				sort.Strings(expSorted)
+				if strings.Join(gotSorted, ",") != strings.Join(expSorted, ",") {
+					t.Errorf("Expected required=%v (set), got %v", expectedRequired, gotRequired)
 				}
 			}
 

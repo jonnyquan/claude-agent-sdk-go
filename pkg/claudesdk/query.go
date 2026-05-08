@@ -34,14 +34,61 @@ func Query(ctx context.Context, prompt string, opts ...Option) (MessageIterator,
 		)
 	}
 
-	// For one-shot queries, create a transport that passes prompt as CLI argument
-	// This matches the Python SDK behavior where prompt is passed via --print flag
-	transport, err := createQueryTransport(prompt, options)
+	// Validate SessionStore option combinations before subprocess spawn.
+	if err := ValidateSessionStoreOptions(ctx, options); err != nil {
+		return nil, fmt.Errorf("invalid session_store configuration: %w", err)
+	}
+
+	// Resume/continue + SessionStore: materialize from store into temp dir.
+	var materialized *MaterializedResume
+	if options.SessionStore != nil {
+		var err error
+		materialized, err = MaterializeResumeSession(ctx, options)
+		if err != nil {
+			return nil, fmt.Errorf("session_store resume materialization failed: %w", err)
+		}
+	}
+	transportOptions := options
+	if materialized != nil {
+		transportOptions = ApplyMaterializedOptions(options, materialized)
+	}
+
+	// For one-shot queries, create a transport that passes prompt as CLI argument.
+	tr, err := createQueryTransport(prompt, transportOptions)
 	if err != nil {
+		if materialized != nil && materialized.Cleanup != nil {
+			_ = materialized.Cleanup()
+		}
 		return nil, fmt.Errorf("failed to create query transport: %w", err)
 	}
 
-	return queryWithTransportAndOptions(ctx, prompt, transport, options)
+	// Wire SessionStore mirror batcher.
+	if options.SessionStore != nil {
+		projectsDir := projectsDirForOptions(transportOptions, materialized)
+		eager := options.SessionStoreFlush == SessionStoreFlushEager
+		maxEntries := -1
+		maxBytes := -1
+		if eager {
+			maxEntries = 0
+			maxBytes = 0
+		}
+		batcher := NewTranscriptMirrorBatcher(MirrorBatcherConfig{
+			Store:             options.SessionStore,
+			ProjectsDir:       projectsDir,
+			MaxPendingEntries: maxEntries,
+			MaxPendingBytes:   maxBytes,
+		})
+		if setter, ok := tr.(interface{ SetMirrorBatcher(MirrorBatcher) }); ok {
+			setter.SetMirrorBatcher(batcher)
+		}
+		if materialized != nil {
+			if cs, ok := tr.(interface{ SetMaterializedCleanup(func() error) }); ok {
+				cs.SetMaterializedCleanup(materialized.Cleanup)
+			}
+		}
+	}
+
+	return queryWithTransportAndOptions(ctx, prompt, tr, options)
 }
 
 // QueryStream executes a unidirectional streaming query.

@@ -114,8 +114,17 @@ type CanUseToolRequest struct {
 	Input                 map[string]any `json:"input"`
 	PermissionSuggestions []any          `json:"permission_suggestions,omitempty"`
 	BlockedPath           *string        `json:"blocked_path,omitempty"`
-	ToolUseID             *string        `json:"tool_use_id,omitempty"`
-	AgentID               *string        `json:"agent_id,omitempty"`
+	// DecisionReason explains why this permission request was triggered
+	// (e.g., a PreToolUse hook returning "ask" with a reason).
+	DecisionReason *string `json:"decision_reason,omitempty"`
+	// Title is the full permission prompt sentence.
+	Title *string `json:"title,omitempty"`
+	// DisplayName is a short noun phrase for the tool action.
+	DisplayName *string `json:"display_name,omitempty"`
+	// Description is a human-readable subtitle for the permission UI.
+	Description *string `json:"description,omitempty"`
+	ToolUseID   *string `json:"tool_use_id,omitempty"`
+	AgentID     *string `json:"agent_id,omitempty"`
 }
 
 // HookCallbackRequest represents a hook callback request from CLI.

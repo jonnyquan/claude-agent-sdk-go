@@ -251,7 +251,32 @@ func (c *ClientImpl) Connect(ctx context.Context, prompts ...StreamMessage) erro
 	if err := c.validateOptions(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
+	// Fail fast on invalid SessionStore option combinations before
+	// spawning the subprocess. Skipped when a custom transport was
+	// supplied — the materialized options never reach a pre-constructed
+	// transport, so loading the store and writing creds to a temp dir
+	// would be wasted work.
+	if c.customTransport == nil {
+		if err := ValidateSessionStoreOptions(ctx, c.options); err != nil {
+			return fmt.Errorf("invalid session_store configuration: %w", err)
+		}
+	}
+
+	// Resume/continue + SessionStore: load the session from the store into
+	// a temp CLAUDE_CONFIG_DIR for the subprocess to resume from.
+	var materialized *MaterializedResume
+	if c.customTransport == nil && c.options != nil && c.options.SessionStore != nil {
+		var err error
+		materialized, err = MaterializeResumeSession(ctx, c.options)
+		if err != nil {
+			return fmt.Errorf("session_store resume materialization failed: %w", err)
+		}
+	}
+
 	transportOptions := c.transportOptions()
+	if materialized != nil {
+		transportOptions = ApplyMaterializedOptions(transportOptions, materialized)
+	}
 
 	// Match Python client behavior: allow repeated connect() calls by
 	// tearing down any existing connection first.
@@ -284,8 +309,41 @@ func (c *ClientImpl) Connect(ctx context.Context, prompts ...StreamMessage) erro
 		c.transport = transport.New(cliPath, transportOptions, "sdk-go-client", Version)
 	}
 
+	// Wire SessionStore mirror batcher if configured (and not using a
+	// custom transport — those don't expose SetMirrorBatcher).
+	if c.customTransport == nil && c.options != nil && c.options.SessionStore != nil {
+		projectsDir := projectsDirForOptions(transportOptions, materialized)
+		eager := c.options.SessionStoreFlush == SessionStoreFlushEager
+		maxEntries := -1 // -1 sentinel → use defaults
+		maxBytes := -1
+		if eager {
+			maxEntries = 0
+			maxBytes = 0
+		}
+		batcher := NewTranscriptMirrorBatcher(MirrorBatcherConfig{
+			Store:             c.options.SessionStore,
+			ProjectsDir:       projectsDir,
+			OnError:           nil,
+			MaxPendingEntries: maxEntries,
+			MaxPendingBytes:   maxBytes,
+		})
+		if setter, ok := c.transport.(interface{ SetMirrorBatcher(MirrorBatcher) }); ok {
+			setter.SetMirrorBatcher(batcher)
+		}
+		if materialized != nil {
+			if cs, ok := c.transport.(interface{ SetMaterializedCleanup(func() error) }); ok {
+				cs.SetMaterializedCleanup(materialized.Cleanup)
+			}
+		}
+	}
+
 	// Connect the transport
 	if err := c.transport.Connect(ctx); err != nil {
+		// On connect failure, run materialized cleanup so the temp creds
+		// dir doesn't leak.
+		if materialized != nil && materialized.Cleanup != nil {
+			_ = materialized.Cleanup()
+		}
 		return fmt.Errorf("failed to connect transport: %w", err)
 	}
 

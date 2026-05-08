@@ -16,11 +16,28 @@ const (
 
 // Content block type constants
 const (
-	ContentBlockTypeText       = "text"
-	ContentBlockTypeThinking   = "thinking"
-	ContentBlockTypeToolUse    = "tool_use"
-	ContentBlockTypeToolResult = "tool_result"
+	ContentBlockTypeText             = "text"
+	ContentBlockTypeThinking         = "thinking"
+	ContentBlockTypeToolUse          = "tool_use"
+	ContentBlockTypeToolResult       = "tool_result"
+	ContentBlockTypeServerToolUse    = "server_tool_use"
+	ContentBlockTypeAdvisorToolResult = "advisor_tool_result"
 	// Note: Python SDK does not include "image" in ContentBlock types
+)
+
+// ServerToolName is the discriminator for server-executed tool calls.
+type ServerToolName = string
+
+// Known server tool names (mirrors Python SDK's ServerToolName Literal).
+const (
+	ServerToolNameAdvisor                  ServerToolName = "advisor"
+	ServerToolNameWebSearch                ServerToolName = "web_search"
+	ServerToolNameWebFetch                 ServerToolName = "web_fetch"
+	ServerToolNameCodeExecution            ServerToolName = "code_execution"
+	ServerToolNameBashCodeExecution        ServerToolName = "bash_code_execution"
+	ServerToolNameTextEditorCodeExecution  ServerToolName = "text_editor_code_execution"
+	ServerToolNameToolSearchToolRegex      ServerToolName = "tool_search_tool_regex"
+	ServerToolNameToolSearchToolBM25       ServerToolName = "tool_search_tool_bm25"
 )
 
 // AssistantMessageError represents error types for assistant messages
@@ -223,6 +240,20 @@ func unmarshalContentBlock(data []byte) (ContentBlock, error) {
 		}
 		return &block, nil
 
+	case ContentBlockTypeServerToolUse:
+		var block ServerToolUseBlock
+		if err := json.Unmarshal(data, &block); err != nil {
+			return nil, err
+		}
+		return &block, nil
+
+	case ContentBlockTypeAdvisorToolResult:
+		var block ServerToolResultBlock
+		if err := json.Unmarshal(data, &block); err != nil {
+			return nil, err
+		}
+		return &block, nil
+
 	default:
 		// Unknown block type, skip it
 		// Note: Python SDK does not include image blocks in ContentBlock types
@@ -269,24 +300,39 @@ func (m *SystemMessage) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// DeferredToolUse represents a tool use that was deferred by a PreToolUse hook
+// returning permissionDecision="defer". When present on a ResultMessage, the
+// run stopped and the caller can inspect this entry to decide whether to resume.
+// Mirrors Python SDK's DeferredToolUse dataclass.
+type DeferredToolUse struct {
+	ID    string         `json:"id"`
+	Name  string         `json:"name"`
+	Input map[string]any `json:"input"`
+}
+
 // ResultMessage represents the final result of a conversation turn.
 type ResultMessage struct {
-	MessageType       string          `json:"type"`
-	Subtype           string          `json:"subtype"`
-	DurationMs        int             `json:"duration_ms"`
-	DurationAPIMs     int             `json:"duration_api_ms"`
-	IsError           bool            `json:"is_error"`
-	NumTurns          int             `json:"num_turns"`
-	SessionID         string          `json:"session_id"`
-	StopReason        *string         `json:"stop_reason,omitempty"`
-	TotalCostUSD      *float64        `json:"total_cost_usd,omitempty"`
-	Usage             *map[string]any `json:"usage,omitempty"`
-	Result            *string         `json:"result,omitempty"`            // Note: Python SDK uses string type
-	StructuredOutput  interface{}     `json:"structured_output,omitempty"` // Structured output when using JSON schema
-	ModelUsage        map[string]any  `json:"model_usage,omitempty"`
-	PermissionDenials []any           `json:"permission_denials,omitempty"`
-	Errors            []string        `json:"errors,omitempty"`
-	UUID              *string         `json:"uuid,omitempty"`
+	MessageType       string           `json:"type"`
+	Subtype           string           `json:"subtype"`
+	DurationMs        int              `json:"duration_ms"`
+	DurationAPIMs     int              `json:"duration_api_ms"`
+	IsError           bool             `json:"is_error"`
+	NumTurns          int              `json:"num_turns"`
+	SessionID         string           `json:"session_id"`
+	StopReason        *string          `json:"stop_reason,omitempty"`
+	TotalCostUSD      *float64         `json:"total_cost_usd,omitempty"`
+	Usage             *map[string]any  `json:"usage,omitempty"`
+	Result            *string          `json:"result,omitempty"`            // Note: Python SDK uses string type
+	StructuredOutput  interface{}      `json:"structured_output,omitempty"` // Structured output when using JSON schema
+	ModelUsage        map[string]any   `json:"model_usage,omitempty"`
+	PermissionDenials []any            `json:"permission_denials,omitempty"`
+	DeferredToolUse   *DeferredToolUse `json:"deferred_tool_use,omitempty"`
+	Errors            []string         `json:"errors,omitempty"`
+	// APIErrorStatus surfaces the HTTP status code (e.g. 429, 500, 529) of a
+	// failing API call when IsError=true and Subtype=="success"; nil otherwise.
+	// Emitted by the CLI since v2.1.110. Safe to log (no message content).
+	APIErrorStatus *int    `json:"api_error_status,omitempty"`
+	UUID           *string `json:"uuid,omitempty"`
 }
 
 // Type returns the message type for ResultMessage.
@@ -426,6 +472,88 @@ func (b *ToolUseBlock) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ServerToolUseBlock represents a server-side tool use block.
+//
+// These are tools the API executes server-side on the model's behalf
+// (e.g. advisor, web_search, web_fetch). They appear in the message stream
+// alongside regular tool_use blocks but the caller never needs to return a
+// result. Branch on Name to know which server tool was invoked.
+type ServerToolUseBlock struct {
+	Type  string         `json:"type"`
+	ID    string         `json:"id"`
+	Name  ServerToolName `json:"name"`
+	Input map[string]any `json:"input"`
+}
+
+// BlockType returns the content block type for ServerToolUseBlock.
+func (b *ServerToolUseBlock) BlockType() string {
+	return ContentBlockTypeServerToolUse
+}
+
+// MarshalJSON implements custom JSON marshaling for ServerToolUseBlock.
+func (b *ServerToolUseBlock) MarshalJSON() ([]byte, error) {
+	type serverToolUseBlock ServerToolUseBlock
+	temp := struct {
+		Type string `json:"type"`
+		*serverToolUseBlock
+	}{
+		Type:               ContentBlockTypeServerToolUse,
+		serverToolUseBlock: (*serverToolUseBlock)(b),
+	}
+	return json.Marshal(temp)
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for ServerToolUseBlock.
+func (b *ServerToolUseBlock) UnmarshalJSON(data []byte) error {
+	type serverToolUseBlock ServerToolUseBlock
+	temp := (*serverToolUseBlock)(b)
+	if err := json.Unmarshal(data, temp); err != nil {
+		return err
+	}
+	b.Type = ContentBlockTypeServerToolUse
+	return nil
+}
+
+// ServerToolResultBlock is the result block returned for a server-side tool call.
+//
+// Mirrors ToolResultBlock's shape. Content is the raw payload from the API,
+// opaque to this layer — callers that care about a specific server tool's
+// result schema can inspect Content["type"].
+type ServerToolResultBlock struct {
+	Type      string         `json:"type"`
+	ToolUseID string         `json:"tool_use_id"`
+	Content   map[string]any `json:"content"`
+}
+
+// BlockType returns the content block type for ServerToolResultBlock.
+func (b *ServerToolResultBlock) BlockType() string {
+	return ContentBlockTypeAdvisorToolResult
+}
+
+// MarshalJSON implements custom JSON marshaling for ServerToolResultBlock.
+func (b *ServerToolResultBlock) MarshalJSON() ([]byte, error) {
+	type serverToolResultBlock ServerToolResultBlock
+	temp := struct {
+		Type string `json:"type"`
+		*serverToolResultBlock
+	}{
+		Type:                  ContentBlockTypeAdvisorToolResult,
+		serverToolResultBlock: (*serverToolResultBlock)(b),
+	}
+	return json.Marshal(temp)
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for ServerToolResultBlock.
+func (b *ServerToolResultBlock) UnmarshalJSON(data []byte) error {
+	type serverToolResultBlock ServerToolResultBlock
+	temp := (*serverToolResultBlock)(b)
+	if err := json.Unmarshal(data, temp); err != nil {
+		return err
+	}
+	b.Type = ContentBlockTypeAdvisorToolResult
+	return nil
+}
+
 // ToolResultBlock represents the result of a tool use.
 type ToolResultBlock struct {
 	Type      string      `json:"type"`
@@ -522,6 +650,42 @@ type TaskNotificationMessage struct {
 	SessionID  string                 `json:"session_id"`
 	ToolUseID  *string                `json:"tool_use_id,omitempty"`
 	Usage      *TaskUsage             `json:"usage,omitempty"`
+}
+
+// HookEventMessage is emitted by the CLI when ClaudeAgentOptions.IncludeHookEvents
+// is true. It surfaces hook lifecycle events (PreToolUse, PostToolUse, Stop, etc.)
+// into the message stream.
+//
+// Wire format: {"type":"system","subtype":"hook_started"|"hook_response","hook_event":"PreToolUse",...}.
+// The Subtype distinguishes lifecycle phase ("hook_started" when a hook begins,
+// "hook_response" when it completes — the latter carries output, exit_code,
+// and outcome keys in Data).
+type HookEventMessage struct {
+	SystemMessage
+	HookEventName string  `json:"hook_event_name"`
+	SessionID     *string `json:"session_id,omitempty"`
+	UUID          *string `json:"uuid,omitempty"`
+}
+
+// MirrorErrorMessage is a system message emitted when a SessionStore.Append
+// call fails. Non-fatal — the local-disk transcript is already durable, so the
+// session continues unaffected. The mirrored copy in the external store will
+// be missing the failed batch.
+//
+// Subtype is "mirror_error".
+type MirrorErrorMessage struct {
+	SystemMessage
+	Key   *SessionKey `json:"key,omitempty"`
+	Error string      `json:"error"`
+}
+
+// SessionKey identifies a session transcript or subagent transcript in a store.
+// Defined in message.go so MirrorErrorMessage can reference it without a
+// dependency cycle. Full documentation in session_store.go.
+type SessionKey struct {
+	ProjectKey string `json:"project_key"`
+	SessionID  string `json:"session_id"`
+	Subpath    string `json:"subpath,omitempty"`
 }
 
 // RateLimitStatus represents rate limit enforcement state.

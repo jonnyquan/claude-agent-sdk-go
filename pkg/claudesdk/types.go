@@ -26,6 +26,41 @@ type TaskNotificationMessage = shared.TaskNotificationMessage
 type TaskNotificationStatus = shared.TaskNotificationStatus
 type TaskUsage = shared.TaskUsage
 
+// HookEventMessage is emitted when ClaudeAgentOptions.IncludeHookEvents is true.
+type HookEventMessage = shared.HookEventMessage
+
+// MirrorErrorMessage is emitted when a SessionStore.Append call fails.
+type MirrorErrorMessage = shared.MirrorErrorMessage
+
+// DeferredToolUse describes a tool use deferred by a PreToolUse hook returning
+// permissionDecision="defer".
+type DeferredToolUse = shared.DeferredToolUse
+
+// SessionKey identifies a session transcript or subagent transcript in a SessionStore.
+type SessionKey = shared.SessionKey
+type SessionListSubkeysKey = shared.SessionListSubkeysKey
+type SessionStoreEntry = shared.SessionStoreEntry
+type SessionStoreListEntry = shared.SessionStoreListEntry
+type SessionSummaryEntry = shared.SessionSummaryEntry
+type SessionStoreFlushMode = shared.SessionStoreFlushMode
+
+// SessionStore mirrors session transcripts to external storage.
+type SessionStore = shared.SessionStore
+
+// UnimplementedSessionStore provides default ErrSessionStoreNotImplemented
+// returns for the optional SessionStore methods.
+type UnimplementedSessionStore = shared.UnimplementedSessionStore
+
+// ErrSessionStoreNotImplemented is the sentinel for unsupported optional
+// SessionStore methods.
+var ErrSessionStoreNotImplemented = shared.ErrSessionStoreNotImplemented
+
+// SessionStoreFlush mode constants.
+const (
+	SessionStoreFlushBatched = shared.SessionStoreFlushBatched
+	SessionStoreFlushEager   = shared.SessionStoreFlushEager
+)
+
 // ResultMessage represents a result or status message.
 type ResultMessage = shared.ResultMessage
 
@@ -40,6 +75,27 @@ type ToolUseBlock = shared.ToolUseBlock
 
 // ToolResultBlock represents a tool result content block.
 type ToolResultBlock = shared.ToolResultBlock
+
+// ServerToolUseBlock represents a server-side tool use block (advisor, web_search, etc.).
+type ServerToolUseBlock = shared.ServerToolUseBlock
+
+// ServerToolResultBlock is the result block for a server-side tool call.
+type ServerToolResultBlock = shared.ServerToolResultBlock
+
+// ServerToolName is the discriminator for server-executed tool calls.
+type ServerToolName = shared.ServerToolName
+
+// Re-export server tool name constants
+const (
+	ServerToolNameAdvisor                 = shared.ServerToolNameAdvisor
+	ServerToolNameWebSearch               = shared.ServerToolNameWebSearch
+	ServerToolNameWebFetch                = shared.ServerToolNameWebFetch
+	ServerToolNameCodeExecution           = shared.ServerToolNameCodeExecution
+	ServerToolNameBashCodeExecution       = shared.ServerToolNameBashCodeExecution
+	ServerToolNameTextEditorCodeExecution = shared.ServerToolNameTextEditorCodeExecution
+	ServerToolNameToolSearchToolRegex     = shared.ServerToolNameToolSearchToolRegex
+	ServerToolNameToolSearchToolBM25      = shared.ServerToolNameToolSearchToolBM25
+)
 
 // StreamEvent represents a stream event for partial message updates.
 type StreamEvent = shared.StreamEvent
@@ -103,10 +159,12 @@ const (
 
 // Re-export content block type constants
 const (
-	ContentBlockTypeText       = shared.ContentBlockTypeText
-	ContentBlockTypeThinking   = shared.ContentBlockTypeThinking
-	ContentBlockTypeToolUse    = shared.ContentBlockTypeToolUse
-	ContentBlockTypeToolResult = shared.ContentBlockTypeToolResult
+	ContentBlockTypeText              = shared.ContentBlockTypeText
+	ContentBlockTypeThinking          = shared.ContentBlockTypeThinking
+	ContentBlockTypeToolUse           = shared.ContentBlockTypeToolUse
+	ContentBlockTypeToolResult        = shared.ContentBlockTypeToolResult
+	ContentBlockTypeServerToolUse     = shared.ContentBlockTypeServerToolUse
+	ContentBlockTypeAdvisorToolResult = shared.ContentBlockTypeAdvisorToolResult
 	// Note: ContentBlockTypeImage removed - not part of Python SDK
 )
 
@@ -122,6 +180,10 @@ const (
 	AssistantMessageErrorServerError          = shared.AssistantMessageErrorServerError
 	AssistantMessageErrorUnknown              = shared.AssistantMessageErrorUnknown
 )
+
+// MirrorBatcher is the subset of TranscriptMirrorBatcher transports need to
+// receive transcript_mirror frames. *TranscriptMirrorBatcher satisfies this.
+type MirrorBatcher = shared.MirrorBatcher
 
 // Transport abstracts the communication layer with Claude Code CLI.
 // This interface stays in main package because it's used by client code.

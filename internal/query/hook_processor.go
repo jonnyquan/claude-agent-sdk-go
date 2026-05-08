@@ -156,11 +156,16 @@ func (hp *HookProcessor) ProcessCanUseTool(
 
 	// Prepare permission context
 	permCtx := shared.ToolPermissionContext{
-		Context:     hp.ctx,
-		Signal:      nil, // TODO: Add abort signal support
-		Suggestions: convertPermissionSuggestions(request.PermissionSuggestions),
-		ToolUseID:   request.ToolUseID,
-		AgentID:     request.AgentID,
+		Context:        hp.ctx,
+		Signal:         nil, // TODO: Add abort signal support
+		Suggestions:    convertPermissionSuggestions(request.PermissionSuggestions),
+		ToolUseID:      request.ToolUseID,
+		AgentID:        request.AgentID,
+		BlockedPath:    request.BlockedPath,
+		DecisionReason: request.DecisionReason,
+		Title:          request.Title,
+		DisplayName:    request.DisplayName,
+		Description:    request.Description,
 	}
 
 	// Call the permission callback

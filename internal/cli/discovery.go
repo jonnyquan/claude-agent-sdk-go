@@ -159,6 +159,55 @@ func addOptionsToCommand(cmd []string, options *shared.Options) []string {
 	return cmd
 }
 
+// applySkillsDefaults computes effective AllowedTools and SettingSources for
+// the Skills option. Mirrors Python SDK's _apply_skills_defaults: when
+// Skills.All is set, injects "Skill"; when Skills.List is non-nil, injects
+// "Skill(name)" for each entry. SettingSources defaults to ["user","project"]
+// when unset so the CLI discovers installed skills without the caller wiring
+// up both options manually. Nil Skills is a no-op.
+//
+// Does not mutate the original options.
+func applySkillsDefaults(options *shared.Options) (allowed []string, settingSources []string, settingSourcesSet bool) {
+	allowed = append(allowed, options.AllowedTools...)
+	if options.SettingSources != nil {
+		settingSources = append(settingSources, options.SettingSources...)
+		settingSourcesSet = true
+	}
+
+	if options.Skills == nil {
+		return allowed, settingSources, settingSourcesSet
+	}
+
+	contains := func(s []string, v string) bool {
+		for _, x := range s {
+			if x == v {
+				return true
+			}
+		}
+		return false
+	}
+
+	if options.Skills.All {
+		if !contains(allowed, "Skill") {
+			allowed = append(allowed, "Skill")
+		}
+	} else {
+		for _, name := range options.Skills.List {
+			pattern := "Skill(" + name + ")"
+			if !contains(allowed, pattern) {
+				allowed = append(allowed, pattern)
+			}
+		}
+	}
+
+	if !settingSourcesSet {
+		settingSources = []string{"user", "project"}
+		settingSourcesSet = true
+	}
+
+	return allowed, settingSources, settingSourcesSet
+}
+
 func addToolControlFlags(cmd []string, options *shared.Options) []string {
 	// Handle tools option (base set of tools)
 	if options.Tools != nil {
@@ -177,8 +226,9 @@ func addToolControlFlags(cmd []string, options *shared.Options) []string {
 		}
 	}
 
-	if len(options.AllowedTools) > 0 {
-		cmd = append(cmd, "--allowedTools", strings.Join(options.AllowedTools, ","))
+	allowed, _, _ := applySkillsDefaults(options)
+	if len(allowed) > 0 {
+		cmd = append(cmd, "--allowedTools", strings.Join(allowed, ","))
 	}
 	if len(options.DisallowedTools) > 0 {
 		cmd = append(cmd, "--disallowedTools", strings.Join(options.DisallowedTools, ","))
@@ -290,6 +340,9 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	}
 	if options.Resume != nil {
 		cmd = append(cmd, "--resume", *options.Resume)
+	}
+	if options.SessionID != nil && *options.SessionID != "" {
+		cmd = append(cmd, "--session-id", *options.SessionID)
 	}
 	if options.MaxTurns > 0 {
 		cmd = append(cmd, "--max-turns", fmt.Sprintf("%d", options.MaxTurns))
@@ -459,11 +512,35 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 	if options.IncludePartialMessages {
 		cmd = append(cmd, "--include-partial-messages")
 	}
+	if options.IncludeHookEvents {
+		cmd = append(cmd, "--include-hook-events")
+	}
+	if options.StrictMcpConfig {
+		cmd = append(cmd, "--strict-mcp-config")
+	}
 	if options.ForkSession {
 		cmd = append(cmd, "--fork-session")
 	}
-	if len(options.SettingSources) > 0 {
-		cmd = append(cmd, "--setting-sources", strings.Join(options.SettingSources, ","))
+	if options.SessionStore != nil {
+		cmd = append(cmd, "--session-mirror")
+	}
+
+	// effective setting sources: explicit value wins; else applySkillsDefaults
+	// sets ["user","project"] when Skills is configured; else not passed.
+	_, settingSources, settingSourcesSet := applySkillsDefaults(options)
+	if settingSourcesSet {
+		// Use --setting-sources=value (single arg) so an empty list correctly
+		// passes through to disable all sources, matching Python SDK fix #822.
+		cmd = append(cmd, "--setting-sources="+strings.Join(settingSources, ","))
+	}
+
+	// Append --thinking / --thinking-display when applicable. Note that the
+	// max-thinking-tokens path is handled in addModelAndPromptFlags. The CLI
+	// expects --thinking adaptive|disabled (not paired with token count) for
+	// non-enabled types — to remain compatible with existing token-mapping
+	// behavior, only forward --thinking-display here.
+	if options.Thinking != nil && options.Thinking.Type != shared.ThinkingTypeDisabled && options.Thinking.Display != "" {
+		cmd = append(cmd, "--thinking-display", string(options.Thinking.Display))
 	}
 
 	// Note: Agents are now sent via initialize request, not as CLI flag

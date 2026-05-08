@@ -58,6 +58,28 @@ type ToolPermissionContext struct {
 	Suggestions []PermissionUpdate // Permission suggestions from CLI
 	ToolUseID   *string
 	AgentID     *string
+
+	// BlockedPath is the file path that triggered the permission request,
+	// if applicable. For example, when a Bash command tries to access a
+	// path outside allowed directories.
+	BlockedPath *string
+
+	// DecisionReason explains why this permission request was triggered.
+	// When a PreToolUse hook returns permissionDecision="ask" with a
+	// permissionDecisionReason, that reason is forwarded here.
+	DecisionReason *string
+
+	// Title is the full permission prompt sentence
+	// (e.g. "Claude wants to read foo.txt"). Use this as the primary prompt
+	// text when present instead of reconstructing from tool name + input.
+	Title *string
+
+	// DisplayName is a short noun phrase for the tool action
+	// (e.g. "Read file"), suitable for button labels or compact UI.
+	DisplayName *string
+
+	// Description is a human-readable subtitle for the permission UI.
+	Description *string
 }
 
 // PermissionResultAllow represents an allow permission result.
@@ -157,4 +179,60 @@ func (p *PermissionUpdate) WithMode(mode string) *PermissionUpdate {
 func (p *PermissionUpdate) WithDirectories(dirs []string) *PermissionUpdate {
 	p.Directories = dirs
 	return p
+}
+
+// PermissionUpdateFromDict constructs a PermissionUpdate from the control
+// protocol dict format (inverse of MarshalJSON). Mirrors Python SDK's
+// PermissionUpdate.from_dict.
+//
+// Used to deserialize raw suggestion dicts emitted by the CLI in
+// permission_request control messages, so callers can inspect them and
+// echo them back in PermissionResultAllow.UpdatedPermissions without losing
+// structural fidelity.
+func PermissionUpdateFromDict(data map[string]any) PermissionUpdate {
+	pu := PermissionUpdate{}
+	if t, ok := data["type"].(string); ok {
+		pu.Type = PermissionUpdateType(t)
+	}
+
+	if rawRules, ok := data["rules"].([]any); ok {
+		rules := make([]PermissionRule, 0, len(rawRules))
+		for _, r := range rawRules {
+			rule, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			tool, _ := rule["toolName"].(string)
+			pr := PermissionRule{ToolName: tool}
+			if rc, ok := rule["ruleContent"].(string); ok {
+				rcCopy := rc
+				pr.RuleContent = &rcCopy
+			}
+			rules = append(rules, pr)
+		}
+		pu.Rules = rules
+	}
+
+	if behavior, ok := data["behavior"].(string); ok {
+		bCopy := behavior
+		pu.Behavior = &bCopy
+	}
+	if mode, ok := data["mode"].(string); ok {
+		mCopy := mode
+		pu.Mode = &mCopy
+	}
+	if rawDirs, ok := data["directories"].([]any); ok {
+		dirs := make([]string, 0, len(rawDirs))
+		for _, d := range rawDirs {
+			if s, ok := d.(string); ok {
+				dirs = append(dirs, s)
+			}
+		}
+		pu.Directories = dirs
+	}
+	if dest, ok := data["destination"].(string); ok {
+		dCopy := PermissionDestination(dest)
+		pu.Destination = &dCopy
+	}
+	return pu
 }

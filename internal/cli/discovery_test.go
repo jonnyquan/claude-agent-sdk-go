@@ -14,6 +14,13 @@ import (
 
 // TestCLIDiscovery tests CLI binary discovery functionality
 func TestCLIDiscovery(t *testing.T) {
+	// Skip on machines that have claude installed at one of the absolute
+	// fallback paths (Homebrew, /usr/local, etc.). The test isolates HOME
+	// and PATH but the implementation also probes absolute system paths,
+	// which the test can't redirect. CI machines without claude installed
+	// will exercise the not-found path normally.
+	skipIfClaudeAtAbsolutePath(t)
+
 	tests := []struct {
 		name          string
 		setupEnv      func(t *testing.T) (cleanup func())
@@ -36,6 +43,24 @@ func TestCLIDiscovery(t *testing.T) {
 			_, err := FindCLI()
 			assertCLIDiscoveryError(t, err, test.expectError, test.errorContains)
 		})
+	}
+}
+
+// skipIfClaudeAtAbsolutePath skips the calling test when `claude` is
+// installed at one of the absolute fallback paths that setupIsolatedEnvironment
+// cannot redirect. Prevents flakes on developer machines while keeping
+// coverage on CI runners that don't have claude installed.
+func skipIfClaudeAtAbsolutePath(t *testing.T) {
+	t.Helper()
+	abs := []string{
+		"/usr/local/bin/claude",
+		"/opt/homebrew/bin/claude",
+		"/usr/local/homebrew/bin/claude",
+	}
+	for _, p := range abs {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			t.Skipf("skipping: claude installed at %s defeats isolation", p)
+		}
 	}
 }
 
@@ -122,7 +147,9 @@ func TestBuildCommandAdvancedFlags(t *testing.T) {
 
 	assertContainsArg(t, cmd, "--include-partial-messages")
 	assertContainsArg(t, cmd, "--fork-session")
-	assertContainsArgs(t, cmd, "--setting-sources", "user,project")
+	// Single-arg --setting-sources= form (Python parity, fix for #822 so an
+	// empty list correctly disables all sources).
+	assertContainsArg(t, cmd, "--setting-sources=user,project")
 
 	// Agents are no longer passed via CLI flag; they are sent via initialize request
 	assertNotContainsArg(t, cmd, "--agents")
@@ -521,6 +548,7 @@ func TestFindCLISuccess(t *testing.T) {
 	// Test executable validation on Unix
 	if runtime.GOOS != windowsOS {
 		t.Run("non_executable_file_skipped", func(t *testing.T) {
+			skipIfClaudeAtAbsolutePath(t)
 			// Create a non-executable file in a location that would be found
 			tempDir := t.TempDir()
 			cliPath := filepath.Join(tempDir, ".npm-global", "bin", "claude")
@@ -566,6 +594,7 @@ func TestFindCLISuccess(t *testing.T) {
 func TestFindCLINodeJSValidation(t *testing.T) {
 	// Test when Node.js is not available
 	t.Run("nodejs_not_found", func(t *testing.T) {
+		skipIfClaudeAtAbsolutePath(t)
 		// Isolate environment
 		originalPath := os.Getenv("PATH")
 		if err := os.Setenv("PATH", "/nonexistent/path"); err != nil {

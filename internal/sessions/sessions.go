@@ -192,7 +192,13 @@ func DeleteSession(sessionID, directory string) error {
 	if path == "" {
 		return fmt.Errorf("session %s not found", sessionID)
 	}
-	return os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	// Subagent transcripts live in a sibling {sessionID}/ dir; often absent.
+	siblingDir := filepath.Join(filepath.Dir(path), sessionID)
+	_ = os.RemoveAll(siblingDir)
+	return nil
 }
 
 func ForkSession(sessionID, directory string, upToMessageID, title *string) (*shared.ForkSessionResult, error) {

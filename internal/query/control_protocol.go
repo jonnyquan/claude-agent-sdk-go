@@ -67,6 +67,20 @@ func NewControlProtocol(
 
 // Initialize sends initialization request to CLI.
 func (cp *ControlProtocol) Initialize(agents map[string]map[string]any, excludeDynamicSections *bool) (map[string]any, error) {
+	return cp.InitializeWithSkills(agents, excludeDynamicSections, nil)
+}
+
+// InitializeWithSkills extends Initialize to forward a Skills allowlist so the
+// CLI can filter which skills are loaded into the system prompt. Pass nil to
+// preserve the prior behavior (no skills field on the wire).
+//
+// SkillsAll() and a nil filter are equivalent at the wire level (no filter),
+// so only an explicit list is actually forwarded.
+func (cp *ControlProtocol) InitializeWithSkills(
+	agents map[string]map[string]any,
+	excludeDynamicSections *bool,
+	skills *shared.SkillsOption,
+) (map[string]any, error) {
 	// Build hooks configuration
 	var hooksConfig map[string]any
 	if cp.hookProcessor != nil {
@@ -91,6 +105,11 @@ func (cp *ControlProtocol) Initialize(agents map[string]map[string]any, excludeD
 	}
 	if excludeDynamicSections != nil {
 		request["excludeDynamicSections"] = *excludeDynamicSections
+	}
+	// 'all' and nil are equivalent at the wire level, so only forward an
+	// explicit list (matches Python SDK).
+	if skills != nil && !skills.All {
+		request["skills"] = skills.List
 	}
 
 	// Send and wait for response
@@ -354,6 +373,21 @@ func (cp *ControlProtocol) handleCanUseTool(data map[string]any) (map[string]any
 
 	if suggestions, ok := data["permission_suggestions"].([]any); ok {
 		request.PermissionSuggestions = suggestions
+	}
+	if blockedPath, ok := data["blocked_path"].(string); ok {
+		request.BlockedPath = &blockedPath
+	}
+	if decisionReason, ok := data["decision_reason"].(string); ok {
+		request.DecisionReason = &decisionReason
+	}
+	if title, ok := data["title"].(string); ok {
+		request.Title = &title
+	}
+	if displayName, ok := data["display_name"].(string); ok {
+		request.DisplayName = &displayName
+	}
+	if description, ok := data["description"].(string); ok {
+		request.Description = &description
 	}
 	if toolUseID, ok := data["tool_use_id"].(string); ok {
 		request.ToolUseID = &toolUseID

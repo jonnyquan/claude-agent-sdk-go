@@ -74,11 +74,21 @@ const (
 	ThinkingTypeDisabled ThinkingType = "disabled"
 )
 
+// ThinkingDisplay controls whether thinking text is returned summarized or omitted.
+// Opus 4.7+ defaults to "omitted" (signature-only); pass "summarized" to receive text.
+type ThinkingDisplay string
+
+const (
+	ThinkingDisplaySummarized ThinkingDisplay = "summarized"
+	ThinkingDisplayOmitted    ThinkingDisplay = "omitted"
+)
+
 // ThinkingConfig controls extended thinking behavior.
 // Takes precedence over MaxThinkingTokens when set.
 type ThinkingConfig struct {
-	Type         ThinkingType `json:"type"`
-	BudgetTokens int          `json:"budget_tokens,omitempty"` // Only used for ThinkingTypeEnabled
+	Type         ThinkingType    `json:"type"`
+	BudgetTokens int             `json:"budget_tokens,omitempty"` // Only used for ThinkingTypeEnabled
+	Display      ThinkingDisplay `json:"display,omitempty"`       // Forwarded as --thinking-display
 }
 
 // EffortLevel controls the effort/depth of thinking.
@@ -88,7 +98,10 @@ const (
 	EffortLow    EffortLevel = "low"
 	EffortMedium EffortLevel = "medium"
 	EffortHigh   EffortLevel = "high"
-	EffortMax    EffortLevel = "max"
+	// EffortXHigh is an Opus 4.7-specific level that falls back to "high" on
+	// other models.
+	EffortXHigh EffortLevel = "xhigh"
+	EffortMax   EffortLevel = "max"
 )
 
 // ToolsPreset represents a preset configuration for available tools.
@@ -187,7 +200,72 @@ type Options struct {
 	// EnableFileCheckpointing enables file checkpointing to track file changes during the session.
 	// When enabled, files can be rewound to their state at any user message using Client.RewindFiles().
 	EnableFileCheckpointing bool `json:"enable_file_checkpointing,omitempty"`
+
+	// IncludeHookEvents emits hook lifecycle events (PreToolUse, PostToolUse,
+	// Stop, etc.) into the message stream as HookEventMessage. Mirrors the
+	// TypeScript SDK's includeHookEvents and the CLI's --include-hook-events flag.
+	IncludeHookEvents bool `json:"include_hook_events,omitempty"`
+
+	// StrictMcpConfig: when true, only use MCP servers passed via McpServers,
+	// ignoring all other MCP configurations the CLI would otherwise load
+	// (project .mcp.json, user/global settings, plugin-provided servers).
+	// Maps to --strict-mcp-config.
+	StrictMcpConfig bool `json:"strict_mcp_config,omitempty"`
+
+	// Skills enables skills on the main session.
+	//
+	// Use SkillsAll() to enable every discovered skill, SkillsList(...names)
+	// for an explicit allowlist, or SkillsNone() to suppress every skill from
+	// the listing. Nil means no SDK-side configuration (the CLI's own defaults
+	// still apply).
+	Skills *SkillsOption `json:"skills,omitempty"`
+
+	// SessionStore mirrors session transcripts to an external store. When set,
+	// every transcript line written locally is also passed to
+	// store.Append(), and Resume can materialize from the store when the
+	// local file is absent.
+	SessionStore SessionStore `json:"-"`
+
+	// SessionStoreFlush controls when transcript-mirror entries are flushed
+	// to SessionStore.
+	//
+	// "batched" (default) coalesces entries and flushes once per turn or when
+	// the buffer exceeds 500 entries / 1 MiB.
+	// "eager" triggers a background flush after every frame for near-real-time
+	// delivery (each flush still runs off the read loop, so a slow adapter
+	// does not stall message streaming).
+	//
+	// Ignored when SessionStore is nil.
+	SessionStoreFlush SessionStoreFlushMode `json:"-"`
+
+	// LoadTimeoutMs sets the timeout for each SessionStore.Load() /
+	// ListSubkeys() call during resume materialization, in milliseconds.
+	// Defaults to 60000 (60s).
+	LoadTimeoutMs int `json:"-"`
 }
+
+// SkillsOption is the value type for Options.Skills.
+//
+// Construct via SkillsAll(), SkillsList(...), or SkillsNone(); a nil
+// *SkillsOption means no SDK-side configuration.
+type SkillsOption struct {
+	All  bool
+	List []string
+}
+
+// SkillsAll enables every discovered skill on the session.
+func SkillsAll() *SkillsOption { return &SkillsOption{All: true} }
+
+// SkillsList enables only the named skills. Names match the SKILL.md `name`
+// or directory name; use "plugin:skill" for plugin-qualified skills.
+func SkillsList(names ...string) *SkillsOption {
+	dup := make([]string, len(names))
+	copy(dup, names)
+	return &SkillsOption{List: dup}
+}
+
+// SkillsNone suppresses every skill from the listing.
+func SkillsNone() *SkillsOption { return &SkillsOption{List: []string{}} }
 
 // AgentDefinition configures a named agent available to the CLI.
 type AgentDefinition struct {
@@ -222,12 +300,23 @@ type PluginConfig struct {
 
 // SandboxNetworkConfig configures network settings for sandbox.
 type SandboxNetworkConfig struct {
+	// AllowedDomains lists domain names that sandboxed processes can access.
+	AllowedDomains []string `json:"allowedDomains,omitempty"`
+	// DeniedDomains lists domains that are always blocked, even if matched
+	// by AllowedDomains.
+	DeniedDomains []string `json:"deniedDomains,omitempty"`
+	// AllowManagedDomainsOnly: when true in managed settings, only managed
+	// AllowedDomains are respected.
+	AllowManagedDomainsOnly bool `json:"allowManagedDomainsOnly,omitempty"`
 	// AllowUnixSockets specifies Unix socket paths accessible in sandbox (e.g., SSH agents).
 	AllowUnixSockets []string `json:"allowUnixSockets,omitempty"`
 	// AllowAllUnixSockets allows all Unix sockets (less secure).
 	AllowAllUnixSockets bool `json:"allowAllUnixSockets,omitempty"`
 	// AllowLocalBinding allows binding to localhost ports (macOS only).
 	AllowLocalBinding bool `json:"allowLocalBinding,omitempty"`
+	// AllowMachLookup is a macOS-only XPC/Mach service name allowlist
+	// (supports trailing wildcard).
+	AllowMachLookup []string `json:"allowMachLookup,omitempty"`
 	// HTTPProxyPort is the HTTP proxy port if bringing your own proxy.
 	HTTPProxyPort int `json:"httpProxyPort,omitempty"`
 	// SOCKSProxyPort is the SOCKS5 proxy port if bringing your own proxy.

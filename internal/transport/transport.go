@@ -65,6 +65,53 @@ type Transport struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// lastErrorResultText holds the result.errors text when the most recent
+	// message was an error result. Used to replace the generic exit code
+	// ProcessError surfaced after the CLI prints a structured error result
+	// and exits non-zero (Python SDK parity).
+	lastErrorMu         sync.Mutex
+	lastErrorResultText *string
+
+	// mirrorBatcher receives transcript_mirror frames when SessionStore is
+	// configured.
+	mirrorBatcher shared.MirrorBatcher
+
+	// materializedCleanup runs after the subprocess exits to remove any
+	// resume-materialized temp directory.
+	materializedCleanup func() error
+}
+
+// SetMirrorBatcher attaches a transcript_mirror sink. Pass nil to detach.
+func (t *Transport) SetMirrorBatcher(b shared.MirrorBatcher) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.mirrorBatcher = b
+}
+
+// SetMaterializedCleanup registers a cleanup callback to run after Close.
+func (t *Transport) SetMaterializedCleanup(cleanup func() error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.materializedCleanup = cleanup
+}
+
+// convertMirrorEntries converts the parsed `entries` field of a
+// transcript_mirror frame into a slice of SessionStoreEntry.
+func convertMirrorEntries(raw any) []shared.SessionStoreEntry {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]shared.SessionStoreEntry, 0, len(arr))
+	for _, item := range arr {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // New creates a new subprocess transport.
@@ -526,6 +573,15 @@ func (t *Transport) Close() error {
 
 	t.connected = false
 
+	// Final-flush mirror entries before tearing down so an early break/return
+	// does not drop the current turn.
+	if t.mirrorBatcher != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		t.mirrorBatcher.Close(closeCtx)
+		cancel()
+		t.mirrorBatcher = nil
+	}
+
 	// Clean up control protocol
 	if t.controlProtocol != nil {
 		_ = t.controlProtocol.Close()
@@ -542,6 +598,12 @@ func (t *Transport) Close() error {
 	if t.stdin != nil {
 		_ = t.stdin.Close()
 		t.stdin = nil
+	}
+
+	// Run materialized resume cleanup (best-effort).
+	if t.materializedCleanup != nil {
+		_ = t.materializedCleanup()
+		t.materializedCleanup = nil
 	}
 
 	// Wait for goroutines to finish with timeout
@@ -618,13 +680,16 @@ func (t *Transport) handleStdout() {
 			continue
 		}
 
-		// Check if this is a control message and route accordingly
-		if t.controlProtocol != nil {
-			var rawMsg map[string]any
-			if err := json.Unmarshal([]byte(line), &rawMsg); err == nil {
-				if msgType, ok := rawMsg["type"].(string); ok {
-					switch msgType {
-					case "control_request", "control_response", "control_cancel_request":
+		// Check if this is a control message or transcript_mirror frame and
+		// route accordingly. We do a single rawMsg parse here that's reused
+		// by both routings.
+		var rawMsg map[string]any
+		_ = json.Unmarshal([]byte(line), &rawMsg)
+		if rawMsg != nil {
+			if msgType, ok := rawMsg["type"].(string); ok {
+				switch msgType {
+				case "control_request", "control_response", "control_cancel_request":
+					if t.controlProtocol != nil {
 						if err := t.controlProtocol.HandleIncomingMessage(msgType, []byte(line)); err != nil {
 							select {
 							case t.errChan <- fmt.Errorf("control protocol error: %w", err):
@@ -632,8 +697,17 @@ func (t *Transport) handleStdout() {
 								return
 							}
 						}
-						continue
 					}
+					continue
+				case "transcript_mirror":
+					// SessionStore write path: peel mirror frames off stdout
+					// and hand to the batcher; do NOT yield to consumers.
+					if t.mirrorBatcher != nil {
+						filePath, _ := rawMsg["filePath"].(string)
+						entries := convertMirrorEntries(rawMsg["entries"])
+						t.mirrorBatcher.Enqueue(filePath, entries)
+					}
+					continue
 				}
 			}
 		}
@@ -652,6 +726,34 @@ func (t *Transport) handleStdout() {
 		// Send parsed messages
 		for _, msg := range messages {
 			if msg != nil {
+				// Track results for ProcessError replacement.
+				if rm, ok := msg.(*shared.ResultMessage); ok {
+					// Flush pending transcript mirror entries before yielding
+					// the result so the SessionStore is up to date for this
+					// turn.
+					if t.mirrorBatcher != nil {
+						t.mirrorBatcher.Flush(t.ctx)
+					}
+					t.lastErrorMu.Lock()
+					if rm.IsError {
+						errText := strings.Join(rm.Errors, "; ")
+						if errText == "" {
+							errText = rm.Subtype
+						}
+						if errText == "" {
+							errText = "unknown error"
+						}
+						t.lastErrorResultText = &errText
+					} else {
+						t.lastErrorResultText = nil
+					}
+					t.lastErrorMu.Unlock()
+				} else if sm, ok := msg.(*shared.SystemMessage); !ok || sm.Subtype != "session_state_changed" {
+					t.lastErrorMu.Lock()
+					t.lastErrorResultText = nil
+					t.lastErrorMu.Unlock()
+				}
+
 				select {
 				case t.msgChan <- msg:
 				case <-t.ctx.Done():
@@ -691,8 +793,19 @@ func (t *Transport) handleStdout() {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		}
+		// When the CLI emits a result with is_error=true and exits non-zero
+		// (for shell-script consumers), replace the generic "Command failed"
+		// with the structured error text the CLI already reported. Mirrors
+		// Python SDK Query.readMessages.
+		message := "Command failed"
+		t.lastErrorMu.Lock()
+		errText := t.lastErrorResultText
+		t.lastErrorMu.Unlock()
+		if errText != nil {
+			message = "Claude Code returned an error result: " + *errText
+		}
 		processErr := shared.NewProcessError(
-			"Command failed",
+			message,
 			exitCode,
 			"Check stderr output for details",
 		)

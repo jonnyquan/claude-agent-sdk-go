@@ -340,6 +340,32 @@ func (p *Parser) parseSystemMessage(data map[string]any) (shared.Message, error)
 		return nil, shared.NewMessageParseError("system message missing subtype field", data)
 	}
 
+	// Hook events (emitted when IncludeHookEvents is enabled) arrive as
+	// system messages with subtype hook_started or hook_response. Route
+	// them to HookEventMessage before the switch below.
+	if subtype == "hook_started" || subtype == "hook_response" {
+		base := shared.SystemMessage{Subtype: subtype, Data: data}
+		hookEventName := ""
+		if v, ok := data["hook_event"].(string); ok {
+			hookEventName = v
+		} else if v, ok := data["hook_name"].(string); ok {
+			hookEventName = v
+		} else if v, ok := data["hook_event_name"].(string); ok {
+			hookEventName = v
+		}
+		msg := &shared.HookEventMessage{
+			SystemMessage: base,
+			HookEventName: hookEventName,
+		}
+		if v, ok := data["session_id"].(string); ok {
+			msg.SessionID = &v
+		}
+		if v, ok := data["uuid"].(string); ok {
+			msg.UUID = &v
+		}
+		return msg, nil
+	}
+
 	base := shared.SystemMessage{
 		Subtype: subtype,
 		Data:    data,
@@ -451,6 +477,30 @@ func (p *Parser) parseSystemMessage(data map[string]any) (shared.Message, error)
 			ToolUseID:     stringPtr(data, "tool_use_id"),
 			Usage:         usage,
 		}, nil
+	case "mirror_error":
+		// SDK-synthesized via reportMirrorError — never emitted by the CLI subprocess.
+		errMsg := ""
+		if s, ok := data["error"].(string); ok {
+			errMsg = s
+		}
+		mirror := &shared.MirrorErrorMessage{
+			SystemMessage: base,
+			Error:         errMsg,
+		}
+		if keyMap, ok := data["key"].(map[string]any); ok {
+			key := &shared.SessionKey{}
+			if v, ok := keyMap["project_key"].(string); ok {
+				key.ProjectKey = v
+			}
+			if v, ok := keyMap["session_id"].(string); ok {
+				key.SessionID = v
+			}
+			if v, ok := keyMap["subpath"].(string); ok {
+				key.Subpath = v
+			}
+			mirror.Key = key
+		}
+		return mirror, nil
 	default:
 		return &base, nil
 	}
@@ -535,6 +585,24 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 			}
 		}
 		result.Errors = errors
+	}
+	// api_error_status: HTTP status of failing API call (CLI v2.1.110+).
+	if status, ok := toInt(data["api_error_status"]); ok {
+		result.APIErrorStatus = &status
+	}
+	// deferred_tool_use: present when a PreToolUse hook returned permissionDecision="defer".
+	if deferred, ok := data["deferred_tool_use"].(map[string]any); ok {
+		dtu := &shared.DeferredToolUse{}
+		if v, ok := deferred["id"].(string); ok {
+			dtu.ID = v
+		}
+		if v, ok := deferred["name"].(string); ok {
+			dtu.Name = v
+		}
+		if v, ok := deferred["input"].(map[string]any); ok {
+			dtu.Input = v
+		}
+		result.DeferredToolUse = dtu
 	}
 	if uuid, ok := data["uuid"].(string); ok {
 		result.UUID = &uuid
@@ -707,8 +775,12 @@ func (p *Parser) parseContentBlock(blockData any) (shared.ContentBlock, error) {
 		return p.parseToolUseBlock(data)
 	case shared.ContentBlockTypeToolResult:
 		return p.parseToolResultBlock(data)
+	case shared.ContentBlockTypeServerToolUse:
+		return p.parseServerToolUseBlock(data)
+	case shared.ContentBlockTypeAdvisorToolResult:
+		return p.parseServerToolResultBlock(data)
 	default:
-		// Skip unknown content block types (e.g., server_tool_use) to match Python SDK behavior
+		// Skip unknown content block types to match Python SDK behavior.
 		debugLog("[SDK-Parser] ⚠️ Skipping unknown content block type: %s", blockType)
 		return nil, nil
 	}
@@ -759,6 +831,43 @@ func (p *Parser) parseToolUseBlock(data map[string]any) (shared.ContentBlock, er
 		ID:    id,
 		Name:  name,
 		Input: input,
+	}, nil
+}
+
+func (p *Parser) parseServerToolUseBlock(data map[string]any) (shared.ContentBlock, error) {
+	id, ok := data["id"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("server_tool_use block missing id field", data)
+	}
+	name, ok := data["name"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("server_tool_use block missing name field", data)
+	}
+	input, _ := data["input"].(map[string]any)
+	if input == nil {
+		input = make(map[string]any)
+	}
+	return &shared.ServerToolUseBlock{
+		Type:  shared.ContentBlockTypeServerToolUse,
+		ID:    id,
+		Name:  name,
+		Input: input,
+	}, nil
+}
+
+func (p *Parser) parseServerToolResultBlock(data map[string]any) (shared.ContentBlock, error) {
+	toolUseID, ok := data["tool_use_id"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("advisor_tool_result block missing tool_use_id field", data)
+	}
+	content, _ := data["content"].(map[string]any)
+	if content == nil {
+		content = make(map[string]any)
+	}
+	return &shared.ServerToolResultBlock{
+		Type:      shared.ContentBlockTypeAdvisorToolResult,
+		ToolUseID: toolUseID,
+		Content:   content,
 	}, nil
 }
 
