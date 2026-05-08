@@ -802,6 +802,61 @@ func TestHandleJSONRPC_CallToolHandlerErrorReturnsIsErrorResult(t *testing.T) {
 	}
 }
 
+// TestHandleJSONRPC_CallToolErrorContentReturnsIsErrorWithContent verifies
+// that returning a *ToolErrorContent emits a successful response carrying
+// the user's custom Content with is_error=true (Python-parity for handler
+// returning {"content": [...], "is_error": True}).
+func TestHandleJSONRPC_CallToolErrorContentReturnsIsErrorWithContent(t *testing.T) {
+	server := NewServer("test", "1.0.0")
+
+	tool := &ToolDefinition{
+		Name:        "fail_with_content",
+		Description: "Returns a tool-level error with custom content",
+		Handler: func(ctx context.Context, args map[string]interface{}) ([]Content, error) {
+			return nil, &ToolErrorContent{
+				Content: []Content{
+					&TextContent{Type: ContentTypeText, Text: "first line"},
+					&TextContent{Type: ContentTypeText, Text: "second line"},
+				},
+			}
+		},
+	}
+	if err := server.RegisterTool(tool); err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+
+	request := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      11,
+		Method:  "tools/call",
+		Params:  map[string]interface{}{"name": "fail_with_content", "arguments": map[string]interface{}{}},
+	}
+	data, _ := json.Marshal(request)
+	responseData, err := server.HandleJSONRPC(11, data)
+	if err != nil {
+		t.Fatalf("HandleJSONRPC: %v", err)
+	}
+	var response JSONRPCResponse
+	if err := json.Unmarshal(responseData, &response); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if response.Error != nil {
+		t.Fatalf("expected success response, got error: %#v", response.Error)
+	}
+	result := response.Result.(map[string]interface{})
+	if isErr, _ := result["is_error"].(bool); !isErr {
+		t.Fatalf("expected is_error=true, got %#v", result["is_error"])
+	}
+	content := result["content"].([]interface{})
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content items (custom content carried through), got %d", len(content))
+	}
+	first := content[0].(map[string]interface{})
+	if first["text"] != "first line" {
+		t.Fatalf("expected first item text 'first line', got %v", first["text"])
+	}
+}
+
 // TestHandleJSONRPC_InvalidJSON tests handling invalid JSON
 func TestHandleJSONRPC_InvalidJSON(t *testing.T) {
 	server := NewServer("test", "1.0.0")

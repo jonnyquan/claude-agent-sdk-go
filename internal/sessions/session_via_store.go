@@ -253,16 +253,15 @@ func GetSessionMessagesFromStore(
 	}
 	messages := make([]shared.SessionMessage, 0, len(visible))
 	for _, e := range visible {
-		var parentToolUseID *string
-		if e.ParentToolUseID != nil {
-			parentToolUseID = e.ParentToolUseID
-		}
+		// Python parity: SessionMessage.parent_tool_use_id is always None
+		// for top-level conversation messages (sidechain messages are
+		// filtered out by isVisibleMessage above).
 		messages = append(messages, shared.SessionMessage{
 			Type:            e.Type,
 			UUID:            e.UUID,
 			SessionID:       e.SessionID,
 			Message:         e.Message,
-			ParentToolUseID: parentToolUseID,
+			ParentToolUseID: nil,
 		})
 	}
 	return paginate(messages, limit, offset), nil
@@ -513,16 +512,13 @@ func entriesToSubagentMessages(entries []transcriptEntry, limit *int, offset int
 		if e.Type != "user" && e.Type != "assistant" {
 			continue
 		}
-		var parentToolUseID *string
-		if e.ParentToolUseID != nil {
-			parentToolUseID = e.ParentToolUseID
-		}
+		// Python parity: SessionMessage.parent_tool_use_id is always None.
 		messages = append(messages, shared.SessionMessage{
 			Type:            e.Type,
 			UUID:            e.UUID,
 			SessionID:       e.SessionID,
 			Message:         e.Message,
-			ParentToolUseID: parentToolUseID,
+			ParentToolUseID: nil,
 		})
 	}
 	return paginate(messages, limit, offset)

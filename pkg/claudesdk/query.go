@@ -241,6 +241,14 @@ type queryIterator struct {
 	mu        sync.Mutex
 	closed    bool
 	closeOnce sync.Once
+
+	// Python-parity wait-for-first-result before closing stdin when hooks
+	// or SDK MCP servers are configured. Without this, the CLI closes its
+	// stdin handle before SDK MCP / hook callbacks can round-trip via
+	// the control protocol (Python SDK fix #780).
+	waitForFirstResultBeforeClose bool
+	firstResultCh                 chan struct{}
+	firstResultOnce               sync.Once
 }
 
 func (qi *queryIterator) Next(_ context.Context) (Message, error) {
@@ -269,6 +277,11 @@ func (qi *queryIterator) Next(_ context.Context) (Message, error) {
 			if !ok {
 				_ = qi.Close()
 				return nil, ErrNoMoreMessages
+			}
+			// Signal first ResultMessage so the deferred EndInput goroutine
+			// (when waitForFirstResultBeforeClose is set) can close stdin.
+			if _, ok := msg.(*ResultMessage); ok && qi.firstResultCh != nil {
+				qi.firstResultOnce.Do(func() { close(qi.firstResultCh) })
 			}
 			return msg, nil
 		case err, ok := <-qi.errChan:
@@ -325,14 +338,41 @@ func (qi *queryIterator) start() error {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
-	// Match Python one-shot query behavior: close stdin after sending prompt.
-	if ender, ok := qi.transport.(inputEnder); ok {
+	// Decide whether to close stdin immediately or wait for the first result
+	// (Python parity: hooks or SDK MCP servers require bidirectional control
+	// protocol communication while stdin is open — fix #780).
+	qi.waitForFirstResultBeforeClose = shouldWaitForFirstResultBeforeEndInput(qi.options)
+	ender, hasEnder := qi.transport.(inputEnder)
+	if !hasEnder {
+		return nil
+	}
+	if !qi.waitForFirstResultBeforeClose {
 		if err := ender.EndInput(qi.ctx); err != nil {
 			_ = qi.transport.Close()
 			return fmt.Errorf("failed to end input: %w", err)
 		}
+		return nil
 	}
-
+	// Hooks or SDK MCP servers configured — defer EndInput to a goroutine
+	// that waits for the first ResultMessage (or a timeout / context
+	// cancellation) before closing stdin.
+	qi.firstResultCh = make(chan struct{})
+	go func() {
+		timeout := streamCloseTimeout()
+		if timeout > 0 {
+			select {
+			case <-qi.firstResultCh:
+			case <-time.After(timeout):
+			case <-qi.ctx.Done():
+			}
+		} else {
+			select {
+			case <-qi.firstResultCh:
+			case <-qi.ctx.Done():
+			}
+		}
+		_ = ender.EndInput(qi.ctx)
+	}()
 	return nil
 }
 

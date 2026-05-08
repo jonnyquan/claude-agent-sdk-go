@@ -303,23 +303,13 @@ func (t *Transport) Connect(ctx context.Context) error {
 	// Create control protocol handler
 	t.controlProtocol = query.NewControlProtocol(t.ctx, t.hookProcessor, writeFn, sdkMCPServers)
 
-	// Build agents dict for initialize request
+	// Build agents dict for initialize request — serializes all non-nil
+	// fields (description, prompt, tools, disallowedTools, model, skills,
+	// memory, mcpServers, initialPrompt, maxTurns, background, effort,
+	// permissionMode) to match Python SDK parity.
 	var agentsDict map[string]map[string]any
-	if t.options != nil && len(t.options.Agents) > 0 {
-		agentsDict = make(map[string]map[string]any, len(t.options.Agents))
-		for name, def := range t.options.Agents {
-			entry := map[string]any{
-				"description": def.Description,
-				"prompt":      def.Prompt,
-			}
-			if len(def.Tools) > 0 {
-				entry["tools"] = def.Tools
-			}
-			if def.Model != nil && *def.Model != "" {
-				entry["model"] = *def.Model
-			}
-			agentsDict[name] = entry
-		}
+	if t.options != nil {
+		agentsDict = shared.SerializeAgentDefinitions(t.options.Agents)
 	}
 
 	// Send initialization request to CLI
@@ -330,7 +320,12 @@ func (t *Transport) Connect(ctx context.Context) error {
 		excludeDynamicSections = preset.ExcludeDynamicSections
 	}
 
-	initResult, err := t.controlProtocol.Initialize(agentsDict, excludeDynamicSections)
+	// Forward Skills allowlist (matches subprocess transport / Python SDK).
+	var skillsOpt *shared.SkillsOption
+	if t.options != nil {
+		skillsOpt = t.options.Skills
+	}
+	initResult, err := t.controlProtocol.InitializeWithSkills(agentsDict, excludeDynamicSections, skillsOpt)
 	if err != nil {
 		return fmt.Errorf("failed to initialize control protocol: %w", err)
 	}
@@ -632,23 +627,23 @@ func (t *Transport) Close() error {
 	return err
 }
 
-// readStderr reads and logs stderr output from CLI for error diagnostics
+// readStderr reads stderr lines and forwards them to the user-supplied
+// stderr callback. Only spawned when shouldPipeStderr returned true (i.e.
+// Options.Stderr was non-nil), so the callback is guaranteed.
+//
+// Mirrors Python SDK's _handle_stderr.
 func (t *Transport) readStderr(stderr io.ReadCloser) {
 	defer t.wg.Done()
 	defer stderr.Close()
 
+	cb := t.options.Stderr
 	scanner := bufio.NewScanner(stderr)
-	debugToStderr := shouldDebugToStderr(t.options)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if len(line) > 0 {
-			// If stderr callback is configured, call it
-			if t.options != nil && t.options.Stderr != nil {
-				t.options.Stderr(line)
-			} else if debugToStderr {
-				_, _ = fmt.Fprintln(os.Stderr, line)
-			}
+		if line == "" {
+			continue
 		}
+		cb(line)
 	}
 }
 
@@ -819,19 +814,15 @@ func (t *Transport) handleStdout() {
 	}
 }
 
+// shouldPipeStderr matches Python SDK 0.1.65+ behavior: stderr piping
+// depends solely on whether a stderr callback is registered. The earlier
+// `--debug-to-stderr` extra-arg detection was dropped in Python fix #860
+// in preparation for CLI flag removal; Go now matches.
 func shouldPipeStderr(options *shared.Options) bool {
 	if options == nil {
 		return false
 	}
-	return options.Stderr != nil || shouldDebugToStderr(options)
-}
-
-func shouldDebugToStderr(options *shared.Options) bool {
-	if options == nil || options.ExtraArgs == nil {
-		return false
-	}
-	_, ok := options.ExtraArgs["debug-to-stderr"]
-	return ok
+	return options.Stderr != nil
 }
 
 func shouldCreateHookProcessor(options *shared.Options) bool {

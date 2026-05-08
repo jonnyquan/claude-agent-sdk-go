@@ -163,6 +163,71 @@ func TestBuildCommandOmitsEmptySettingSources(t *testing.T) {
 	assertNotContainsArg(t, cmd, "--setting-sources")
 }
 
+// TestBuildCommandThinkingFlagMapping covers the Python-parity fix: adaptive
+// and disabled types map to --thinking adaptive|disabled, NOT to
+// --max-thinking-tokens 32000|0. enabled maps to --max-thinking-tokens
+// {budget_tokens}.
+func TestBuildCommandThinkingFlagMapping(t *testing.T) {
+	t.Run("adaptive_uses_thinking_flag", func(t *testing.T) {
+		opts := &shared.Options{
+			Thinking: &shared.ThinkingConfig{Type: shared.ThinkingTypeAdaptive},
+		}
+		cmd := BuildCommand("/usr/local/bin/claude", opts)
+		assertContainsArgs(t, cmd, "--thinking", "adaptive")
+		assertNotContainsArg(t, cmd, "--max-thinking-tokens")
+	})
+	t.Run("disabled_uses_thinking_flag", func(t *testing.T) {
+		opts := &shared.Options{
+			Thinking: &shared.ThinkingConfig{Type: shared.ThinkingTypeDisabled},
+		}
+		cmd := BuildCommand("/usr/local/bin/claude", opts)
+		assertContainsArgs(t, cmd, "--thinking", "disabled")
+		assertNotContainsArg(t, cmd, "--max-thinking-tokens")
+	})
+	t.Run("enabled_uses_max_thinking_tokens", func(t *testing.T) {
+		opts := &shared.Options{
+			Thinking: &shared.ThinkingConfig{Type: shared.ThinkingTypeEnabled, BudgetTokens: 8192},
+		}
+		cmd := BuildCommand("/usr/local/bin/claude", opts)
+		assertContainsArgs(t, cmd, "--max-thinking-tokens", "8192")
+		// --thinking enabled is NOT emitted; only the token-budget form.
+		for i, a := range cmd {
+			if a == "--thinking" && i+1 < len(cmd) && cmd[i+1] == "enabled" {
+				t.Errorf("did not expect --thinking enabled, got %v", cmd)
+			}
+		}
+	})
+	t.Run("display_forwarded_for_non_disabled", func(t *testing.T) {
+		opts := &shared.Options{
+			Thinking: &shared.ThinkingConfig{
+				Type:    shared.ThinkingTypeAdaptive,
+				Display: shared.ThinkingDisplaySummarized,
+			},
+		}
+		cmd := BuildCommand("/usr/local/bin/claude", opts)
+		assertContainsArgs(t, cmd, "--thinking-display", "summarized")
+	})
+	t.Run("max_thinking_tokens_when_thinking_nil", func(t *testing.T) {
+		v := 4096
+		opts := &shared.Options{MaxThinkingTokens: &v}
+		cmd := BuildCommand("/usr/local/bin/claude", opts)
+		assertContainsArgs(t, cmd, "--max-thinking-tokens", "4096")
+		assertNotContainsArg(t, cmd, "--thinking")
+	})
+}
+
+// TestBuildCommandFiltersClaudecodeEnv is enforced indirectly via test
+// TestBuildCommandSubprocessEnv elsewhere; here we just assert the build does
+// not emit a flag for it (smoke check that nothing references env directly).
+func TestBuildCommandDoesNotEmitClaudecodeFlag(t *testing.T) {
+	cmd := BuildCommand("/usr/local/bin/claude", &shared.Options{})
+	for _, a := range cmd {
+		if a == "--claudecode" || a == "CLAUDECODE" {
+			t.Errorf("BuildCommand should not emit a CLAUDECODE flag, got %v", cmd)
+		}
+	}
+}
+
 func TestBuildCommandWithMcpServers(t *testing.T) {
 	opts := &shared.Options{
 		McpServers: map[string]shared.McpServerConfig{
@@ -1139,4 +1204,82 @@ func TestBuildSettingsValue(t *testing.T) {
 			t.Errorf("Expected empty string, got %s", result)
 		}
 	})
+}
+
+// TestBuildCommandTaskBudget verifies --task-budget emission (Python parity).
+func TestBuildCommandTaskBudget(t *testing.T) {
+	t.Run("emits_task_budget_flag", func(t *testing.T) {
+		opts := &shared.Options{TaskBudget: &shared.TaskBudget{Total: 200000}}
+		cmd := BuildCommand("/usr/local/bin/claude", opts)
+		assertContainsArgs(t, cmd, "--task-budget", "200000")
+	})
+	t.Run("omits_when_nil", func(t *testing.T) {
+		cmd := BuildCommand("/usr/local/bin/claude", &shared.Options{})
+		assertNotContainsArg(t, cmd, "--task-budget")
+	})
+}
+
+// TestBuildCommandSystemPromptFile verifies --system-prompt-file emission
+// for SystemPromptFile values (Python parity, missing in earlier Go SDK).
+func TestBuildCommandSystemPromptFile(t *testing.T) {
+	opts := &shared.Options{
+		SystemPrompt: shared.SystemPromptFile{
+			Type: "file",
+			Path: "/etc/claude/system-prompt.txt",
+		},
+	}
+	cmd := BuildCommand("/usr/local/bin/claude", opts)
+	assertContainsArgs(t, cmd, "--system-prompt-file", "/etc/claude/system-prompt.txt")
+	// --system-prompt should NOT be emitted when --system-prompt-file is.
+	for i, a := range cmd {
+		if a == "--system-prompt" && i+1 < len(cmd) && cmd[i+1] != "" {
+			t.Errorf("--system-prompt should not be set when SystemPromptFile is provided, got %v", cmd)
+		}
+	}
+}
+
+// TestBuildCommandMcpConfigFallback verifies that when McpServers is empty
+// but McpConfig is set, --mcp-config <value> is emitted (Python parity for
+// the `mcp_servers: dict | str | Path` polymorphism).
+func TestBuildCommandMcpConfigFallback(t *testing.T) {
+	cfg := "/tmp/mcp.json"
+	opts := &shared.Options{McpConfig: &cfg}
+	cmd := BuildCommand("/usr/local/bin/claude", opts)
+	assertContainsArgs(t, cmd, "--mcp-config", "/tmp/mcp.json")
+}
+
+// TestBuildCommandSdkServerIncludesName verifies SDK servers serialize with
+// both `type` and `name` fields (Python parity, fix for routing
+// mcp_message requests back to the correct server).
+func TestBuildCommandSdkServerIncludesName(t *testing.T) {
+	opts := &shared.Options{
+		McpServers: map[string]shared.McpServerConfig{
+			"calc": &shared.McpSdkServerConfig{
+				Type: shared.McpServerTypeSDK,
+				Name: "calc",
+			},
+		},
+	}
+	cmd := BuildCommand("/usr/local/bin/claude", opts)
+	idx := indexOf(cmd, "--mcp-config")
+	if idx < 0 || idx+1 >= len(cmd) {
+		t.Fatal("expected --mcp-config flag to be present")
+	}
+	payload := cmd[idx+1]
+	if !contains(payload, `"type":"sdk"`) || !contains(payload, `"name":"calc"`) {
+		t.Errorf("expected payload to include type=sdk and name=calc, got %s", payload)
+	}
+}
+
+func indexOf(args []string, target string) int {
+	for i, a := range args {
+		if a == target {
+			return i
+		}
+	}
+	return -1
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

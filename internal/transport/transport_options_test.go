@@ -6,51 +6,9 @@ import (
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/shared"
 )
 
-func TestShouldDebugToStderr(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		options *shared.Options
-		want    bool
-	}{
-		{
-			name:    "nil options",
-			options: nil,
-			want:    false,
-		},
-		{
-			name:    "nil extra args",
-			options: &shared.Options{},
-			want:    false,
-		},
-		{
-			name: "debug flag absent",
-			options: &shared.Options{
-				ExtraArgs: map[string]*string{"other-flag": nil},
-			},
-			want: false,
-		},
-		{
-			name: "debug flag present",
-			options: &shared.Options{
-				ExtraArgs: map[string]*string{"debug-to-stderr": nil},
-			},
-			want: true,
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := shouldDebugToStderr(tc.options); got != tc.want {
-				t.Fatalf("shouldDebugToStderr()=%v want %v", got, tc.want)
-			}
-		})
-	}
-}
-
+// TestShouldPipeStderr verifies stderr piping is gated solely on whether
+// a stderr callback is registered (Python SDK 0.1.65+ parity, fix #860 —
+// the prior `--debug-to-stderr` extra-arg fallback was removed).
 func TestShouldPipeStderr(t *testing.T) {
 	t.Parallel()
 
@@ -65,21 +23,19 @@ func TestShouldPipeStderr(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "no callback no debug",
-			options: &shared.Options{ExtraArgs: map[string]*string{}},
+			name:    "no callback",
+			options: &shared.Options{},
+			want:    false,
+		},
+		{
+			name:    "no callback even with debug-to-stderr extra arg",
+			options: &shared.Options{ExtraArgs: map[string]*string{"debug-to-stderr": nil}},
 			want:    false,
 		},
 		{
 			name: "with callback",
 			options: &shared.Options{
 				Stderr: func(string) {},
-			},
-			want: true,
-		},
-		{
-			name: "with debug flag",
-			options: &shared.Options{
-				ExtraArgs: map[string]*string{"debug-to-stderr": nil},
 			},
 			want: true,
 		},

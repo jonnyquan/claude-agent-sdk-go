@@ -180,7 +180,7 @@ func (hp *HookProcessor) ProcessCanUseTool(
 	switch r := result.(type) {
 	case *shared.PermissionResultAllow:
 		response.Behavior = "allow"
-		// Always return updatedInput (or original if nil)
+		// Python parity: always emit updatedInput (or original if nil).
 		if r.UpdatedInput != nil {
 			response.UpdatedInput = r.UpdatedInput
 		} else {
@@ -192,8 +192,15 @@ func (hp *HookProcessor) ProcessCanUseTool(
 
 	case *shared.PermissionResultDeny:
 		response.Behavior = "deny"
+		// Python parity: always emit message (even when empty); only emit
+		// interrupt when true. PermissionResponse uses omitempty on both,
+		// but omitempty on a string drops empty values, so guard the
+		// downstream marshaler by routing through a typed dict so message
+		// is always present.
 		response.Message = r.Message
 		response.Interrupt = r.Interrupt
+		// Stash via SuppressMessageOmit so MarshalJSON keeps "message".
+		response.AlwaysEmitMessage = true
 
 	default:
 		return nil, fmt.Errorf("invalid permission result type: %T", result)
@@ -211,110 +218,72 @@ func (hp *HookProcessor) SetCanUseToolCallback(callback shared.CanUseToolCallbac
 
 // Helper functions
 
+// convertPermissionSuggestions deserializes a list of raw suggestion dicts
+// (as received from the CLI's permission_request control message) into
+// PermissionUpdate values. Mirrors Python SDK's
+// `[PermissionUpdate.from_dict(s) for s in suggestions]` from #920.
 func convertPermissionSuggestions(suggestions []any) []shared.PermissionUpdate {
 	if len(suggestions) == 0 {
 		return nil
 	}
-
 	updates := make([]shared.PermissionUpdate, 0, len(suggestions))
 	for _, raw := range suggestions {
 		item, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-
-		updateType, ok := item["type"].(string)
-		if !ok || updateType == "" {
+		t, _ := item["type"].(string)
+		if t == "" {
 			continue
 		}
-
-		update := shared.PermissionUpdate{
-			Type: shared.PermissionUpdateType(updateType),
-		}
-
-		if dest, ok := item["destination"].(string); ok && dest != "" {
-			d := shared.PermissionDestination(dest)
-			update.Destination = &d
-		}
-		if behavior, ok := item["behavior"].(string); ok && behavior != "" {
-			b := behavior
-			update.Behavior = &b
-		}
-		if mode, ok := item["mode"].(string); ok && mode != "" {
-			m := mode
-			update.Mode = &m
-		}
-
-		if rawDirs, ok := item["directories"].([]any); ok && len(rawDirs) > 0 {
-			dirs := make([]string, 0, len(rawDirs))
-			for _, dirRaw := range rawDirs {
-				if dir, ok := dirRaw.(string); ok && dir != "" {
-					dirs = append(dirs, dir)
-				}
-			}
-			if len(dirs) > 0 {
-				update.Directories = dirs
-			}
-		}
-
-		if rawRules, ok := item["rules"].([]any); ok && len(rawRules) > 0 {
-			rules := make([]shared.PermissionRule, 0, len(rawRules))
-			for _, rawRule := range rawRules {
-				ruleMap, ok := rawRule.(map[string]any)
-				if !ok {
-					continue
-				}
-				toolName, ok := ruleMap["toolName"].(string)
-				if !ok || toolName == "" {
-					continue
-				}
-
-				rule := shared.PermissionRule{ToolName: toolName}
-				if ruleContent, ok := ruleMap["ruleContent"].(string); ok {
-					rc := ruleContent
-					rule.RuleContent = &rc
-				}
-				rules = append(rules, rule)
-			}
-			if len(rules) > 0 {
-				update.Rules = rules
-			}
-		}
-
-		updates = append(updates, update)
+		updates = append(updates, shared.PermissionUpdateFromDict(item))
 	}
-
 	return updates
 }
 
+// convertPermissionUpdates serializes a list of PermissionUpdate values into
+// the wire-format dict list the control protocol expects.
+//
+// Mirrors Python's PermissionUpdate.to_dict variant-aware filtering: each
+// type only carries the fields meaningful for that variant. Fields set on
+// the wrong variant are dropped silently to match Python (and to avoid
+// confusing the CLI's strict TypeScript-side validator).
 func convertPermissionUpdates(updates []shared.PermissionUpdate) []any {
 	result := make([]any, len(updates))
 	for i, update := range updates {
-		// Convert to map for JSON serialization
 		data := map[string]any{
 			"type": string(update.Type),
 		}
+		// Destination applies to all variants.
 		if update.Destination != nil {
 			data["destination"] = string(*update.Destination)
 		}
-		if len(update.Rules) > 0 {
-			rules := make([]map[string]any, len(update.Rules))
-			for j, rule := range update.Rules {
-				rules[j] = map[string]any{
-					"toolName":    rule.ToolName,
-					"ruleContent": rule.RuleContent,
+		switch update.Type {
+		case shared.PermissionUpdateTypeAddRules,
+			shared.PermissionUpdateTypeReplaceRules,
+			shared.PermissionUpdateTypeRemoveRules:
+			if update.Rules != nil {
+				rules := make([]map[string]any, len(update.Rules))
+				for j, rule := range update.Rules {
+					rules[j] = map[string]any{
+						"toolName":    rule.ToolName,
+						"ruleContent": rule.RuleContent,
+					}
 				}
+				data["rules"] = rules
 			}
-			data["rules"] = rules
-		}
-		if update.Behavior != nil {
-			data["behavior"] = *update.Behavior
-		}
-		if update.Mode != nil {
-			data["mode"] = *update.Mode
-		}
-		if len(update.Directories) > 0 {
-			data["directories"] = update.Directories
+			if update.Behavior != nil {
+				data["behavior"] = *update.Behavior
+			}
+		case shared.PermissionUpdateTypeSetMode:
+			if update.Mode != nil {
+				data["mode"] = *update.Mode
+			}
+		case shared.PermissionUpdateTypeAddDirectories,
+			shared.PermissionUpdateTypeRemoveDirectories:
+			if update.Directories != nil {
+				data["directories"] = update.Directories
+			}
 		}
 		result[i] = data
 	}

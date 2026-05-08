@@ -259,6 +259,15 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 		if sp != nil && sp.Append != nil {
 			cmd = append(cmd, "--append-system-prompt", *sp.Append)
 		}
+	case shared.SystemPromptFile:
+		// Load system prompt from file (Python parity, --system-prompt-file).
+		if sp.Path != "" {
+			cmd = append(cmd, "--system-prompt-file", sp.Path)
+		}
+	case *shared.SystemPromptFile:
+		if sp != nil && sp.Path != "" {
+			cmd = append(cmd, "--system-prompt-file", sp.Path)
+		}
 	}
 	if options.AppendSystemPrompt != nil {
 		cmd = append(cmd, "--append-system-prompt", *options.AppendSystemPrompt)
@@ -269,30 +278,28 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 	if options.FallbackModel != nil {
 		cmd = append(cmd, "--fallback-model", *options.FallbackModel)
 	}
-	// Resolve thinking config → --max-thinking-tokens
-	// `Thinking` takes precedence over the deprecated `MaxThinkingTokens`
-	var resolvedMaxThinkingTokens *int
-	if options.MaxThinkingTokens != nil {
-		v := *options.MaxThinkingTokens
-		resolvedMaxThinkingTokens = &v
-	}
+	// Resolve thinking config -> --thinking / --max-thinking-tokens.
+	// `Thinking` takes precedence over the deprecated `MaxThinkingTokens`.
+	//
+	// Mapping (matches Python SDK fix #796 and TypeScript SDK):
+	//   adaptive -> --thinking adaptive
+	//   enabled  -> --max-thinking-tokens BudgetTokens
+	//   disabled -> --thinking disabled
 	if options.Thinking != nil {
 		switch options.Thinking.Type {
 		case shared.ThinkingTypeAdaptive:
-			if resolvedMaxThinkingTokens == nil {
-				v := 32000
-				resolvedMaxThinkingTokens = &v
-			}
+			cmd = append(cmd, "--thinking", "adaptive")
 		case shared.ThinkingTypeEnabled:
-			v := options.Thinking.BudgetTokens
-			resolvedMaxThinkingTokens = &v
+			cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", options.Thinking.BudgetTokens))
 		case shared.ThinkingTypeDisabled:
-			v := 0
-			resolvedMaxThinkingTokens = &v
+			cmd = append(cmd, "--thinking", "disabled")
 		}
-	}
-	if resolvedMaxThinkingTokens != nil {
-		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", *resolvedMaxThinkingTokens))
+		// Forward --thinking-display when set (not meaningful for "disabled").
+		if options.Thinking.Type != shared.ThinkingTypeDisabled && options.Thinking.Display != "" {
+			cmd = append(cmd, "--thinking-display", string(options.Thinking.Display))
+		}
+	} else if options.MaxThinkingTokens != nil {
+		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", *options.MaxThinkingTokens))
 	}
 
 	// Add effort flag
@@ -349,6 +356,10 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	}
 	if options.MaxBudgetUSD != nil {
 		cmd = append(cmd, "--max-budget-usd", strconv.FormatFloat(*options.MaxBudgetUSD, 'f', -1, 64))
+	}
+	// API-side task token budget — Python emits `--task-budget <total>`.
+	if options.TaskBudget != nil {
+		cmd = append(cmd, "--task-budget", fmt.Sprintf("%d", options.TaskBudget.Total))
 	}
 
 	// Handle settings and sandbox: merge sandbox into settings if both are provided
@@ -442,7 +453,16 @@ func addFileSystemFlags(cmd []string, options *shared.Options) []string {
 }
 
 func addMCPFlags(cmd []string, options *shared.Options) []string {
-	if options == nil || len(options.McpServers) == 0 {
+	if options == nil {
+		return cmd
+	}
+
+	// When McpServers is empty, fall back to McpConfig (Python parity for
+	// `mcp_servers: dict | str | Path` polymorphism).
+	if len(options.McpServers) == 0 {
+		if options.McpConfig != nil && *options.McpConfig != "" {
+			cmd = append(cmd, "--mcp-config", *options.McpConfig)
+		}
 		return cmd
 	}
 
@@ -484,9 +504,11 @@ func addMCPFlags(cmd []string, options *shared.Options) []string {
 			}
 			servers[name] = payload
 		case *shared.McpSdkServerConfig:
-			// For SDK servers, pass type only (instance is not serializable)
+			// For SDK servers, pass type and name (Python parity:
+			// strips only the non-serializable `instance` field).
 			payload := map[string]interface{}{
 				"type": string(shared.McpServerTypeSDK),
+				"name": server.Name,
 			}
 			servers[name] = payload
 		default:
@@ -495,6 +517,10 @@ func addMCPFlags(cmd []string, options *shared.Options) []string {
 	}
 
 	if len(servers) == 0 {
+		// Fall back to McpConfig if provided, otherwise emit nothing.
+		if options.McpConfig != nil && *options.McpConfig != "" {
+			cmd = append(cmd, "--mcp-config", *options.McpConfig)
+		}
 		return cmd
 	}
 
@@ -534,15 +560,7 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 		cmd = append(cmd, "--setting-sources="+strings.Join(settingSources, ","))
 	}
 
-	// Append --thinking / --thinking-display when applicable. Note that the
-	// max-thinking-tokens path is handled in addModelAndPromptFlags. The CLI
-	// expects --thinking adaptive|disabled (not paired with token count) for
-	// non-enabled types — to remain compatible with existing token-mapping
-	// behavior, only forward --thinking-display here.
-	if options.Thinking != nil && options.Thinking.Type != shared.ThinkingTypeDisabled && options.Thinking.Display != "" {
-		cmd = append(cmd, "--thinking-display", string(options.Thinking.Display))
-	}
-
+	// Note: --thinking and --thinking-display are emitted by addModelAndPromptFlags.
 	// Note: Agents are now sent via initialize request, not as CLI flag
 
 	// Add plugin directories

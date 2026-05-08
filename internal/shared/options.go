@@ -268,9 +268,16 @@ func SkillsList(names ...string) *SkillsOption {
 func SkillsNone() *SkillsOption { return &SkillsOption{List: []string{}} }
 
 // AgentDefinition configures a named agent available to the CLI.
+//
+// Note: passing "Skill" inside Tools is deprecated; configure the Skills
+// field instead, which provides more granular control over available
+// skills and auto-injects the Skill tool name.
 type AgentDefinition struct {
-	Description     string          `json:"description"`
-	Prompt          string          `json:"prompt"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt"`
+	// Tools lists tool names available to the agent.
+	//
+	// Deprecated: passing "Skill" here is deprecated; use Skills instead.
 	Tools           []string        `json:"tools,omitempty"`
 	DisallowedTools []string        `json:"disallowedTools,omitempty"`
 	Model           *string         `json:"model,omitempty"`
@@ -282,6 +289,67 @@ type AgentDefinition struct {
 	Background      *bool           `json:"background,omitempty"`
 	Effort          interface{}     `json:"effort,omitempty"`
 	PermissionMode  *PermissionMode `json:"permissionMode,omitempty"`
+}
+
+// SerializeAgentDefinition produces the wire-format dict for an AgentDefinition,
+// dropping all unset (nil/zero) optional fields. Mirrors Python SDK's
+// `{k: v for k, v in asdict(agent_def).items() if v is not None}`.
+//
+// Used by both subprocess and alternate transports to build the initialize
+// request payload, ensuring all 12 fields (not just the original 4) round-trip
+// to the CLI.
+func SerializeAgentDefinition(def AgentDefinition) map[string]any {
+	entry := map[string]any{
+		"description": def.Description,
+		"prompt":      def.Prompt,
+	}
+	if def.Tools != nil {
+		entry["tools"] = def.Tools
+	}
+	if def.DisallowedTools != nil {
+		entry["disallowedTools"] = def.DisallowedTools
+	}
+	if def.Model != nil {
+		entry["model"] = *def.Model
+	}
+	if def.Skills != nil {
+		entry["skills"] = def.Skills
+	}
+	if def.Memory != nil {
+		entry["memory"] = *def.Memory
+	}
+	if def.McpServers != nil {
+		entry["mcpServers"] = def.McpServers
+	}
+	if def.InitialPrompt != nil {
+		entry["initialPrompt"] = *def.InitialPrompt
+	}
+	if def.MaxTurns != nil {
+		entry["maxTurns"] = *def.MaxTurns
+	}
+	if def.Background != nil {
+		entry["background"] = *def.Background
+	}
+	if def.Effort != nil {
+		entry["effort"] = def.Effort
+	}
+	if def.PermissionMode != nil {
+		entry["permissionMode"] = string(*def.PermissionMode)
+	}
+	return entry
+}
+
+// SerializeAgentDefinitions converts a map of AgentDefinitions into the
+// wire-format dict expected by the initialize request.
+func SerializeAgentDefinitions(agents map[string]AgentDefinition) map[string]map[string]any {
+	if len(agents) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]any, len(agents))
+	for name, def := range agents {
+		out[name] = SerializeAgentDefinition(def)
+	}
+	return out
 }
 
 // PluginType represents the type of plugin.

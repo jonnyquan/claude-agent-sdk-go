@@ -125,3 +125,72 @@ func TestSendControlRequestReturnsEmptyMapWhenResponseBodyMissing(t *testing.T) 
 		t.Fatalf("expected empty map, got %#v", got)
 	}
 }
+
+// TestHandleControlCancelCancelsInflightRequest verifies that a
+// control_cancel_request from the CLI cancels the matching in-flight
+// inbound control request's context. Mirrors Python SDK fix #751.
+func TestHandleControlCancelCancelsInflightRequest(t *testing.T) {
+	cp := NewControlProtocol(context.Background(), nil, func([]byte) error { return nil }, nil)
+
+	// Manually register an in-flight request — emulates handleControlRequest
+	// having spawned a long-running handler.
+	reqID := "req_42"
+	ctx, cancel := context.WithCancel(context.Background())
+	cp.inflightMu.Lock()
+	cp.inflightRequests[reqID] = cancel
+	cp.inflightMu.Unlock()
+
+	// Sanity check: context not cancelled.
+	select {
+	case <-ctx.Done():
+		t.Fatal("context cancelled prematurely")
+	default:
+	}
+
+	// Send the cancel request.
+	cancelMsg, _ := json.Marshal(map[string]any{
+		"type":       "control_cancel_request",
+		"request_id": reqID,
+	})
+	if err := cp.handleControlCancel(cancelMsg); err != nil {
+		t.Fatalf("handleControlCancel: %v", err)
+	}
+
+	// In-flight entry should be removed.
+	cp.inflightMu.Lock()
+	_, stillRegistered := cp.inflightRequests[reqID]
+	cp.inflightMu.Unlock()
+	if stillRegistered {
+		t.Fatal("expected in-flight entry to be removed after cancel")
+	}
+
+	// Context should be cancelled.
+	select {
+	case <-ctx.Done():
+		// expected
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("context not cancelled within deadline")
+	}
+}
+
+// TestHandleControlCancelUnknownIDIsNoOp ensures cancelling a stale id is
+// silently ignored (matches Python's `pop(cancel_id, None)` behavior).
+func TestHandleControlCancelUnknownIDIsNoOp(t *testing.T) {
+	cp := NewControlProtocol(context.Background(), nil, func([]byte) error { return nil }, nil)
+	cancelMsg, _ := json.Marshal(map[string]any{
+		"type":       "control_cancel_request",
+		"request_id": "ghost",
+	})
+	if err := cp.handleControlCancel(cancelMsg); err != nil {
+		t.Fatalf("expected nil error for unknown request_id, got %v", err)
+	}
+}
+
+// TestHandleControlCancelMalformedReturnsError verifies bad JSON surfaces
+// as an error rather than panicking.
+func TestHandleControlCancelMalformedReturnsError(t *testing.T) {
+	cp := NewControlProtocol(context.Background(), nil, func([]byte) error { return nil }, nil)
+	if err := cp.handleControlCancel([]byte("{not valid json")); err == nil {
+		t.Fatal("expected error from malformed control_cancel_request")
+	}
+}

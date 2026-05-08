@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -12,6 +13,33 @@ import (
 // ToolHandler is a function that handles tool execution.
 // It receives the tool arguments and returns the result content.
 type ToolHandler func(ctx context.Context, args map[string]interface{}) ([]Content, error)
+
+// ToolErrorContent is the internal error type that signals a tool-level
+// error with content. The handler returns this wrapped in `error`; the
+// JSON-RPC bridge unwraps it via errors.As and emits a successful response
+// with `is_error: true` and the carried content.
+//
+// The public claudesdk package's ToolError is converted to this internally.
+type ToolErrorContent struct {
+	Content []Content
+	Message string
+}
+
+// Error implements the error interface.
+func (e *ToolErrorContent) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	if len(e.Content) > 0 {
+		if t, ok := e.Content[0].(*TextContent); ok {
+			return t.Text
+		}
+	}
+	return "tool error"
+}
 
 // ToolDefinition defines a tool with its handler.
 type ToolDefinition struct {
@@ -162,8 +190,23 @@ func (s *Server) handleCallTool(ctx context.Context, request JSONRPCRequest) ([]
 	// Call the tool
 	content, err := s.CallTool(ctx, name, args)
 	if err != nil {
-		// Match Python SDK bridge behavior: handler failures are returned as
-		// successful tool results with is_error=true and text content.
+		// ToolErrorContent signals a tool-level error: emit a successful
+		// response carrying the user's content with is_error=true.
+		var tec *ToolErrorContent
+		if errors.As(err, &tec) {
+			content := tec.Content
+			if len(content) == 0 {
+				content = []Content{&TextContent{Type: ContentTypeText, Text: tec.Message}}
+			}
+			result := map[string]interface{}{
+				"content":  normalizeToolResultContent(content),
+				"is_error": true,
+			}
+			return s.successResponse(request.ID, result)
+		}
+		// Match Python SDK bridge behavior: plain handler errors are
+		// returned as successful tool results with is_error=true and a
+		// text content carrying err.Error().
 		result := map[string]interface{}{
 			"content": []map[string]interface{}{
 				{

@@ -1,5 +1,304 @@
 # Changelog
 
+## 0.1.77 (continued — twelfth pass)
+
+### Bug Fixes
+
+- **Subprocess transport env precedence didn't match Python**: Python
+  composes the child env as `system → CLAUDE_CODE_ENTRYPOINT default →
+  user ExtraEnv → CLAUDE_AGENT_SDK_VERSION`. The user's `ExtraEnv` can
+  override the default `CLAUDE_CODE_ENTRYPOINT` (so callers can specify
+  a custom entrypoint name), but `CLAUDE_AGENT_SDK_VERSION` is always
+  SDK-controlled.
+
+  Go was appending both SDK identifiers AFTER user env, so the user
+  could not override `CLAUDE_CODE_ENTRYPOINT` even when intended. The
+  alt transport (`internal/transport/transport.go`) already had the
+  correct order; the bundled subprocess variant now does too.
+
+### Tests
+
+- `TestEnvPrecedence_UserCanOverrideEntrypoint` — confirms ExtraEnv
+  beats the default entrypoint.
+- `TestEnvPrecedence_SDKVersionOverridesUser` — confirms user can't
+  spoof the SDK version.
+- `TestEnvPrecedence_DefaultEntrypointWhenNoOverride` — confirms the
+  default still flows through when ExtraEnv is empty.
+
+## 0.1.77 (continued — eleventh pass)
+
+### Bug Fixes
+
+- **Subprocess transport pushed stderr lines as errors when no callback
+  was set**: Python only pipes stderr when `Options.stderr` is non-nil
+  (`stderr_dest = PIPE if self._options.stderr is not None else None`),
+  letting CLI debug lines flow naturally to the terminal otherwise. Go
+  pipsed unconditionally and pushed every line to `errChan` as a fake
+  error, polluting consumers' error channel with normal CLI debug
+  output. Now gates the pipe on `Options.Stderr != nil` and skips the
+  reader goroutine entirely when no callback is set — Python parity.
+
+- **Alt transport `--debug-to-stderr` extra-arg fallback removed**:
+  Python SDK fix #860 (in 0.1.65) dropped the `--debug-to-stderr`
+  extra-arg detection from the transport layer in preparation for the
+  CLI flag's removal. Stderr piping now depends solely on whether a
+  stderr callback is registered. Go alt transport had retained the
+  fallback; removed for parity. Updated `TestShouldPipeStderr` to
+  assert the new "callback only" gating.
+
+### Tests
+
+- Updated `TestShouldPipeStderr` (4 cases): nil options / no callback /
+  no callback even with extra arg / callback present.
+- Removed obsolete `TestShouldDebugToStderr`.
+
+## 0.1.77 (continued — tenth pass)
+
+### Bug Fixes
+
+- **macOS Keychain credentials not read on resume materialization**: For
+  Mac users on the default OAuth flow, OAuth tokens live in the macOS
+  Keychain (not on disk). When resuming via a `SessionStore` with a
+  redirected `CLAUDE_CONFIG_DIR`, the resumed subprocess's Keychain
+  lookup misses (different service-name suffix) and falls back to
+  `plainTextStorage` at `${tmpBase}/.credentials.json` — which Go was
+  leaving empty.
+
+  Now reads `Claude Code-credentials` from the Keychain via the
+  `security find-generic-password` command and writes the result
+  (refresh-token-redacted) to the temp credentials file. Mirrors
+  Python SDK's `_read_keychain_credentials` fallback path.
+
+  Gated the same way Python is: skipped when caller supplies
+  `CLAUDE_CONFIG_DIR` or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`
+  in env (those auth methods don't need the Keychain).
+
+  Build-tag-split implementation: `keychain_darwin.go` for the real
+  call, `keychain_other.go` returns nil (Python parity:
+  `platform.system() != "Darwin"` returns None).
+
+## 0.1.77 (continued — ninth pass)
+
+### Bug Fixes
+
+- **Subprocess transport ignored `Options.User`**: The bundled
+  `internal/subprocess/transport.go` did not call `applyUserOption` to
+  set `cmd.SysProcAttr.Credential`, so `WithUser(...)` was a no-op when
+  the bundled transport was active. The alternate `internal/transport`
+  variant already wired this. Both transports now do.
+
+  Mirrors Python's `user=options.user` argument to `anyio.open_process`.
+  Unix-only — Windows surfaces a clear "WithUser is not supported on
+  Windows" error rather than silently ignoring the option.
+
+## 0.1.77 (continued — eighth pass)
+
+### Bug Fixes
+
+- **`simpleHash` int32-min two's-complement overflow**: When the running
+  `h` lands on the int32 minimum value (-2^31), `h = -h` in two's-
+  complement int32 arithmetic wraps back to the same value, leaving a
+  negative result that then gets rendered as a negative number in
+  base-36. Python's `_simple_hash` does `abs(h)` on a Python int (no
+  overflow). Cast to int64 before negating so abs is correct.
+
+  Project directory naming uses `simpleHash` for paths longer than
+  `MAX_SANITIZED_LENGTH`. The bug would have produced the wrong project
+  directory hash for any path whose hash happened to land on int32 min,
+  causing the SDK to look in the wrong directory.
+
+### Tests
+
+- `TestSimpleHashEmptyString` — empty input → "0" (Python parity).
+- `TestSimpleHashConsistent` — same input produces the same digest
+  across calls; smoke-tests longer inputs that may push toward the
+  int32 boundary.
+- `TestSimpleHashInt32MinNoOverflow` — verifies output remains a
+  valid base-36 string.
+- `TestSimpleHashKnownValues` — pins three known hashes
+  (`"a"` → "2p", `"/tmp"` → "wh3c", `"hello world"` → "to5x38") with
+  trace-verified arithmetic.
+
+## 0.1.77 (continued — seventh pass)
+
+### Bug Fixes
+
+- **`Options.LoadTimeoutMs` was not enforced**: `MaterializeResumeSession`
+  passed the caller's `ctx` to `Load`/`ListSessions`/`ListSubkeys`
+  without wrapping it in a deadline, so a hung adapter could block
+  resume materialization indefinitely. Python uses `asyncio.wait_for`
+  per call. Go now wraps `ctx` with `context.WithTimeout` derived from
+  `LoadTimeoutMs` (default 60 000 ms).
+- **Subprocess transport stdout scanner ignored `MaxBufferSize`**: The
+  bundled `internal/subprocess/transport.go` used `bufio.NewScanner`'s
+  default 64 KB token cap. JSON messages larger than 64 KB would
+  truncate or surface as scanner errors. The alternate
+  `internal/transport/transport.go` already honored `MaxBufferSize`;
+  both now do (defaults to `parser.MaxBufferSize`, 1 MiB — Python
+  `_DEFAULT_MAX_BUFFER_SIZE` parity).
+
+### Tests
+
+- `TestMaterializeResumeRespectsLoadTimeoutMs` — `LoadTimeoutMs=100ms`
+  trips a hanging-store stub well within the test deadline.
+- `TestMaterializeResumeDefaultsLoadTimeoutMs` — `LoadTimeoutMs=0` does
+  not expire immediately (uses the 60 s default).
+
+## 0.1.77 (continued — sixth pass)
+
+### Bug Fixes
+
+- **`convertPermissionUpdates` was not variant-aware**: Python's
+  `PermissionUpdate.to_dict` only emits the fields meaningful for each
+  type variant: `addRules`/`replaceRules`/`removeRules` carry rules +
+  behavior, `setMode` carries mode, `addDirectories`/`removeDirectories`
+  carry directories. Go was emitting all set fields regardless of type.
+  Now uses a switch keyed by `Type` to match Python.
+- **`PermissionResponse` deny payload dropped empty `message`**: Python
+  always emits `{"behavior": "deny", "message": response.message}`,
+  including `"message": ""` when empty. Go's struct used `omitempty`
+  on `Message` and dropped it. Added `AlwaysEmitMessage` flag and a
+  custom `MarshalJSON` so deny payloads always carry the field.
+- **`convertPermissionSuggestions` reimplemented full deserialize
+  inline**: Now calls the existing `PermissionUpdateFromDict` helper
+  (matches Python's `[PermissionUpdate.from_dict(s) for s in ...]`).
+  Same wire behavior, less duplicated code, single source of truth.
+
+### Tests
+
+- Added 4 `TestPermissionResponse*` cases covering AlwaysEmitMessage
+  on deny, allow without message, interrupt-only-when-true.
+- Added `TestPermissionUpdateFromDictRoundtripsAllVariants` over 4
+  variants (addRules / setMode / addDirectories / with destination).
+
+## 0.1.77 (continued — fifth pass)
+
+### Bug Fixes
+
+- **`--task-budget` flag was never emitted**: `Options.TaskBudget` was
+  defined and validated but the command builder didn't forward it.
+  Python emits `--task-budget <total>`. Go now does the same.
+- **`SystemPromptFile` value type silently dropped on the wire**: The
+  command-builder switch on `SystemPrompt` had cases for `string`,
+  `*string`, `SystemPromptPreset`, `*SystemPromptPreset` but no case
+  for `SystemPromptFile`. Callers using `WithSystemPromptFile(path)`
+  would have their value ignored and the SDK would emit
+  `--system-prompt ""` instead of `--system-prompt-file <path>`. Both
+  value and pointer cases now handled.
+- **`extractPrompt` used ASCII `"..."` instead of Unicode `"…"`**:
+  Python's `_extract_first_prompt_from_head` truncates with `"…"`
+  (one rune) and `.rstrip()`s before appending. Go used `"..."` (three
+  ASCII dots) with no rstrip. The disk-path session lister produced
+  prompts that didn't match Python or `fold_session_summary` — same
+  transcript content, different rendered title.
+- **`extractPrompt` joined multiple text blocks with `\n` instead of
+  returning the first**: Python iterates each text block in turn and
+  returns the first valid one (newlines replaced with spaces). Go
+  collected all blocks and joined them with `\n`. Multi-block user
+  messages produced concatenated prompts visible in `list_sessions`.
+- **`extractPrompt` did not skip `isCompactSummary` entries**: Python
+  filters compaction-summary entries from first-prompt extraction; Go
+  only filtered `isMeta`. Compaction-summary text could leak into
+  session summaries.
+- **Newlines in single-string content were not collapsed to spaces**:
+  Python uses `raw.replace("\n", " ")` before strip; Go preserved
+  newlines, so multi-line single-string prompts displayed wrong.
+
+### Tests
+
+- Added 8 `TestExtractPrompt_*` cases covering the rewritten
+  per-block iteration / Unicode ellipsis / rstrip / newline-collapse /
+  isCompactSummary / tool_result skip behaviors.
+- Added 4 command-builder tests for the new `--task-budget`,
+  `--system-prompt-file`, `--mcp-config` fallback, and SDK server
+  `name` field.
+
+## 0.1.77 (continued — fourth pass)
+
+### Bug Fixes
+
+- **`control_cancel_request` now actually cancels in-flight inbound
+  requests** (Python SDK fix #751). The handler was a TODO; long-running
+  hook callbacks or `canUseTool` prompts the CLI abandoned would
+  continue running and write a stale response. Now wraps each inbound
+  request in a per-request context that the matching cancel ID cancels.
+- **`McpConfig` raw string/path is now honored**: When `Options.McpServers`
+  is empty but `Options.McpConfig` is set, the SDK emits
+  `--mcp-config <value>` (matches Python's `mcp_servers: dict | str | Path`
+  polymorphism).
+- **SDK MCP server config now includes `name` field**: Python passes
+  everything except the non-serializable `instance` field for SDK
+  servers; Go was emitting only `type`. The CLI relies on `name` to
+  route `mcp_message` requests back to the right SDK server.
+- **`SessionMessage.parent_tool_use_id` always nil on store-backed
+  reads**: Python forces `parent_tool_use_id=None` for all visible
+  messages (sidechain entries are filtered above). Go was preserving
+  the entry's value on the via-store paths; both disk and store paths
+  now match.
+
+### New Features
+
+- **`Options.McpConfig`** is now actually wired into the command builder
+  as a fallback path. Use it to pass an MCP config file path or raw JSON
+  string when not enumerating servers in `McpServers`.
+
+## 0.1.77 (continued — third pass)
+
+### Bug Fixes
+
+- **Full `AgentDefinition` field forwarding to `initialize`**: Both
+  subprocess and alternate transports now serialize all 12 non-nil agent
+  fields (`description`, `prompt`, `tools`, `disallowedTools`, `model`,
+  `skills`, `memory`, `mcpServers`, `initialPrompt`, `maxTurns`,
+  `background`, `effort`, `permissionMode`) instead of just the original
+  4 (`description`, `prompt`, `tools`, `model`). The Python SDK
+  serializes all non-`None` fields via `asdict`; Go now matches.
+- **Alternate transport now forwards `Skills` on initialize**: The
+  `internal/transport` variant was calling `Initialize(...)` instead of
+  `InitializeWithSkills(...)`, so `Options.Skills` was silently dropped
+  when callers used that transport. Both transports now use the
+  Skills-aware path.
+- **`sanitizeUnicode` applies NFKC normalization**: Python uses
+  `unicodedata.normalize("NFKC", current)` before stripping format
+  characters, which decomposes ligatures and compatibility characters
+  (e.g. `U+FB00` "ﬀ" → "ff"). Go's implementation was missing this step.
+  Now uses `golang.org/x/text/unicode/norm.NFKC.String`.
+- **Fork session `content-replacement` and `custom-title` entries now
+  carry `uuid` + `timestamp`**: Python adds these fields so adapters
+  that dedup by `uuid` accept the entry. Go was emitting them without
+  either field.
+
+### Documentation
+
+- `AgentDefinition.Tools` now carries a `Deprecated:` doc note pointing
+  callers to `Skills`, matching Python SDK.
+
+## 0.1.77 (continued)
+
+### Bug Fixes
+
+- **Thinking flag mapping**: `ThinkingTypeAdaptive` now emits
+  `--thinking adaptive` (not `--max-thinking-tokens 32000`) and
+  `ThinkingTypeDisabled` emits `--thinking disabled` (not
+  `--max-thinking-tokens 0`). `ThinkingTypeEnabled` continues to map to
+  `--max-thinking-tokens {budget_tokens}`. Matches Python SDK fix #796 /
+  TypeScript SDK behavior.
+- **`CLAUDECODE` env filtering in subprocess transport**: The bundled
+  subprocess transport now filters `CLAUDECODE` from inherited env so
+  SDK-spawned children don't think they're running inside a Claude Code
+  parent (Python SDK fix #573 / #732). The alternate `internal/transport`
+  variant already had this filter; both transports are now consistent.
+
+### New Features
+
+- **`ToolError` for SDK MCP tools**: New public type `claudesdk.ToolError`
+  (with `NewToolError(message)` and `NewToolErrorWithContent(...)`
+  constructors) lets `ToolHandler` emit a successful tool response with
+  `is_error: true` and custom content. Mirrors Python SDK's
+  `{"content": [...], "is_error": True}` dict return path. Plain `error`
+  returns continue to map to `is_error=true` with the error text as
+  content (existing behavior preserved).
+
 ## 0.1.77
 
 ### New Features

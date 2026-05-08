@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/shared"
 )
@@ -67,6 +68,15 @@ func MaterializeResumeSession(ctx context.Context, options *shared.Options) (*Ma
 	}
 	projectKey := ProjectKeyForDirectory(cwd)
 
+	// Enforce Options.LoadTimeoutMs on every Load/ListSessions call,
+	// matching Python's _with_timeout. Defaults to 60_000 ms when zero.
+	timeoutMs := options.LoadTimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 60_000
+	}
+	loadCtx, cancelLoad := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+	defer cancelLoad()
+
 	var (
 		sessionID string
 		entries   []shared.SessionStoreEntry
@@ -80,13 +90,13 @@ func MaterializeResumeSession(ctx context.Context, options *shared.Options) (*Ma
 			return nil, nil
 		}
 		sessionID = *options.Resume
-		entries, err = loadCandidate(ctx, store, projectKey, sessionID)
+		entries, err = loadCandidate(loadCtx, store, projectKey, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("SessionStore.Load() for session %s during resume materialization: %w",
 				sessionID, err)
 		}
 	} else {
-		sessionID, entries, err = resolveContinueCandidate(ctx, store, projectKey)
+		sessionID, entries, err = resolveContinueCandidate(loadCtx, store, projectKey)
 		if err != nil {
 			return nil, fmt.Errorf("SessionStore.ListSessions() during resume materialization: %w", err)
 		}
@@ -118,7 +128,8 @@ func MaterializeResumeSession(ctx context.Context, options *shared.Options) (*Ma
 	copyAuthFiles(tmpBase, options.ExtraEnv)
 
 	// Materialize subagent transcripts if the store can enumerate them.
-	if err := materializeSubkeys(ctx, store, projectDir, projectKey, sessionID); err != nil {
+	// Reuse the timeout-bounded loadCtx for ListSubkeys/Load calls.
+	if err := materializeSubkeys(loadCtx, store, projectDir, projectKey, sessionID); err != nil {
 		// Subagent materialization failures are non-fatal — log and continue.
 		// (The session itself is materialized; only the subagent .jsonl
 		// sidekicks are missing, and the CLI handles that gracefully.)
@@ -252,8 +263,13 @@ func writeJSONL(path string, entries []shared.SessionStoreEntry) error {
 // .claude.json from the caller's config dir to the materialized tmp tree so
 // the subprocess can authenticate.
 //
-// macOS Keychain-only setups (no .credentials.json on disk) are not handled
-// here — Go callers must set CLAUDE_CONFIG_DIR or ANTHROPIC_API_KEY explicitly.
+// macOS default OAuth setup keeps tokens in the Keychain, not a file.
+// Redirecting CLAUDE_CONFIG_DIR changes the Keychain service-name suffix,
+// so the resumed subprocess's Keychain lookup misses and falls back to
+// plainTextStorage at ${tmpBase}/.credentials.json. We populate that file
+// from the parent's Keychain so the resumed subprocess can authenticate.
+// Skipped when env-based auth or a custom CLAUDE_CONFIG_DIR is in play.
+// Mirrors Python SDK's _copy_auth_files Keychain fallback.
 func copyAuthFiles(tmpBase string, optEnv map[string]string) {
 	caller := optEnv["CLAUDE_CONFIG_DIR"]
 	if caller == "" {
@@ -270,13 +286,26 @@ func copyAuthFiles(tmpBase string, optEnv map[string]string) {
 	}
 
 	// .credentials.json — copy with refresh token redacted.
+	var credsJSON []byte
 	if sourceConfigDir != "" {
 		credsPath := filepath.Join(sourceConfigDir, ".credentials.json")
 		if data, err := os.ReadFile(credsPath); err == nil {
-			redacted := redactRefreshToken(data)
-			dst := filepath.Join(tmpBase, ".credentials.json")
-			_ = os.WriteFile(dst, redacted, 0o600)
+			credsJSON = data
 		}
+	}
+
+	// macOS Keychain fallback when no .credentials.json on disk and no
+	// caller-supplied CLAUDE_CONFIG_DIR or env-based auth in play.
+	if caller == "" && envAuthAbsent(optEnv) {
+		if keychainCreds := readKeychainCredentials(); keychainCreds != nil {
+			credsJSON = keychainCreds
+		}
+	}
+
+	if credsJSON != nil {
+		redacted := redactRefreshToken(credsJSON)
+		dst := filepath.Join(tmpBase, ".credentials.json")
+		_ = os.WriteFile(dst, redacted, 0o600)
 	}
 
 	// .claude.json lives at $CLAUDE_CONFIG_DIR/.claude.json when set, else
@@ -290,6 +319,21 @@ func copyAuthFiles(tmpBase string, optEnv map[string]string) {
 	if claudeJSONSrc != "" {
 		copyIfPresent(claudeJSONSrc, filepath.Join(tmpBase, ".claude.json"))
 	}
+}
+
+// envAuthAbsent returns true when neither ANTHROPIC_API_KEY nor
+// CLAUDE_CODE_OAUTH_TOKEN is set in optEnv or the process env. When auth
+// already comes from env, the Keychain fallback would be a wasted spawn.
+func envAuthAbsent(optEnv map[string]string) bool {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		if v, ok := optEnv[key]; ok && v != "" {
+			return false
+		}
+		if os.Getenv(key) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // redactRefreshToken removes claudeAiOauth.refreshToken from a credentials

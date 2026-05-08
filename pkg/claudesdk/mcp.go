@@ -2,11 +2,36 @@ package claudesdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/mcp"
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/shared"
 )
+
+// convertContentsToMCP converts a slice of public ToolContent values into
+// the internal mcp.Content shape. Used by both the success and ToolError
+// paths.
+func convertContentsToMCP(contents []ToolContent) ([]mcp.Content, error) {
+	mcpContents := make([]mcp.Content, len(contents))
+	for i, content := range contents {
+		switch c := content.(type) {
+		case *TextContent:
+			mcpContents[i] = &mcp.TextContent{Type: mcp.ContentTypeText, Text: c.text}
+		case *ImageContent:
+			mcpContents[i] = &mcp.ImageContent{Type: mcp.ContentTypeImage, Data: c.data, MimeType: c.mimeType}
+		case *AudioContent:
+			mcpContents[i] = &mcp.AudioContent{Type: mcp.ContentTypeAudio, Data: c.data, MimeType: c.mimeType}
+		case *ResourceLinkContent:
+			mcpContents[i] = &mcp.ResourceLinkContent{Type: mcp.ContentTypeResourceLink, Name: c.name, URI: c.uri, Description: c.description}
+		case *ResourceContent:
+			mcpContents[i] = &mcp.ResourceContent{Type: mcp.ContentTypeResource, Resource: mcp.EmbeddedResource{URI: c.uri, Text: c.text, Blob: c.blob, MimeType: c.mimeType}}
+		default:
+			return nil, fmt.Errorf("unsupported content type: %T", content)
+		}
+	}
+	return mcpContents, nil
+}
 
 // ToolHandler is a function that handles tool execution.
 // It receives the tool arguments and returns content (text or images).
@@ -19,7 +44,50 @@ import (
 //	        NewTextContent(fmt.Sprintf("Hello, %s!", name)),
 //	    }, nil
 //	}
+//
+// To return a tool-level error with custom content (Python parity for
+// `{"content": [...], "is_error": true}`), return a *ToolError. Plain
+// errors are converted to is_error=true with the error text as content.
 type ToolHandler func(ctx context.Context, args map[string]interface{}) ([]ToolContent, error)
+
+// ToolError carries tool-level error content for the MCP response.
+//
+// Returning a *ToolError from a ToolHandler tells the SDK MCP bridge to
+// emit a successful JSON-RPC response with `is_error: true` and the
+// provided Content (or a single TextContent built from Message if Content
+// is empty). Mirrors Python SDK's `{"content": [...], "is_error": True}`
+// dict return.
+type ToolError struct {
+	Content []ToolContent
+	Message string
+}
+
+// Error implements the error interface.
+func (e *ToolError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	if len(e.Content) > 0 {
+		if t, ok := e.Content[0].(*TextContent); ok {
+			return t.text
+		}
+	}
+	return "tool error"
+}
+
+// NewToolError constructs a ToolError with a single TextContent message.
+func NewToolError(message string) *ToolError {
+	return &ToolError{Message: message}
+}
+
+// NewToolErrorWithContent constructs a ToolError that carries arbitrary
+// ToolContent items in the is_error=true response.
+func NewToolErrorWithContent(content ...ToolContent) *ToolError {
+	return &ToolError{Content: content}
+}
 
 // ToolAnnotations represents public MCP tool annotation metadata.
 type ToolAnnotations = map[string]interface{}
@@ -246,53 +314,23 @@ func CreateSDKMcpServer(name string, version string, tools ...*ToolDef) *shared.
 			// Call the user's handler
 			contents, err := tool.Handler(ctx, args)
 			if err != nil {
+				// ToolError signals a tool-level error: surface as a
+				// successful response with is_error=true plus the carried
+				// Content. The internal MCP bridge does this when the
+				// returned error is *mcp.ToolErrorContent.
+				var te *ToolError
+				if errors.As(err, &te) {
+					mcpContents, convErr := convertContentsToMCP(te.Content)
+					if convErr != nil {
+						return nil, convErr
+					}
+					return nil, &mcp.ToolErrorContent{Content: mcpContents, Message: te.Message}
+				}
 				return nil, err
 			}
 
 			// Convert public ToolContent to internal mcp.Content
-			mcpContents := make([]mcp.Content, len(contents))
-			for i, content := range contents {
-				switch c := content.(type) {
-				case *TextContent:
-					mcpContents[i] = &mcp.TextContent{
-						Type: mcp.ContentTypeText,
-						Text: c.text,
-					}
-				case *ImageContent:
-					mcpContents[i] = &mcp.ImageContent{
-						Type:     mcp.ContentTypeImage,
-						Data:     c.data,
-						MimeType: c.mimeType,
-					}
-				case *AudioContent:
-					mcpContents[i] = &mcp.AudioContent{
-						Type:     mcp.ContentTypeAudio,
-						Data:     c.data,
-						MimeType: c.mimeType,
-					}
-				case *ResourceLinkContent:
-					mcpContents[i] = &mcp.ResourceLinkContent{
-						Type:        mcp.ContentTypeResourceLink,
-						Name:        c.name,
-						URI:         c.uri,
-						Description: c.description,
-					}
-				case *ResourceContent:
-					mcpContents[i] = &mcp.ResourceContent{
-						Type: mcp.ContentTypeResource,
-						Resource: mcp.EmbeddedResource{
-							URI:      c.uri,
-							Text:     c.text,
-							Blob:     c.blob,
-							MimeType: c.mimeType,
-						},
-					}
-				default:
-					return nil, fmt.Errorf("unsupported content type: %T", content)
-				}
-			}
-
-			return mcpContents, nil
+			return convertContentsToMCP(contents)
 		}
 
 		// Register with internal server

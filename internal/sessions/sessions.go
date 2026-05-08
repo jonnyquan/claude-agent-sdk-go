@@ -331,6 +331,10 @@ func ForkSession(sessionID, directory string, upToMessageID, title *string) (*sh
 			"type":         "content-replacement",
 			"sessionId":    forkedSessionID,
 			"replacements": contentReplacements,
+			// Python parity: include uuid + timestamp so adapters that
+			// dedup by uuid don't reject the entry.
+			"uuid":      newUUID(),
+			"timestamp": now,
 		}))
 	}
 
@@ -349,6 +353,9 @@ func ForkSession(sessionID, directory string, upToMessageID, title *string) (*sh
 		"type":        "custom-title",
 		"customTitle": forkTitle,
 		"sessionId":   forkedSessionID,
+		// Python parity: include uuid + timestamp.
+		"uuid":      newUUID(),
+		"timestamp": now,
 	}))
 
 	targetPath := filepath.Join(projectDir, forkedSessionID+".jsonl")
@@ -534,8 +541,21 @@ func firstNonNilString(values ...*string) *string {
 	return nil
 }
 
+// extractPrompt extracts the first meaningful user prompt from a transcript
+// entry. Returns (prompt, commandFallback). commandFallback is the first
+// <command-name> seen — used when no real prompt is available.
+//
+// Mirrors Python's _extract_first_prompt_from_head text-iteration loop:
+//   - Skip isMeta / isCompactSummary entries.
+//   - For each text content block in turn (not joined), strip and replace
+//     \n with space, then check for slash-command marker (save fallback)
+//     or IDE/skip patterns (continue) or truncate-and-return.
+//   - tool_result content blocks make the entire entry skip-worthy.
 func extractPrompt(entry map[string]any) (string, string) {
 	if isMeta, _ := entry["isMeta"].(bool); isMeta {
+		return "", ""
+	}
+	if isCompactSummary, _ := entry["isCompactSummary"].(bool); isCompactSummary {
 		return "", ""
 	}
 	message, ok := entry["message"].(map[string]any)
@@ -543,40 +563,51 @@ func extractPrompt(entry map[string]any) (string, string) {
 		return "", ""
 	}
 	content := message["content"]
+
+	commandFallback := ""
+	processText := func(raw string) (string, bool) {
+		// Replace newlines with spaces BEFORE strip, matching Python.
+		result := strings.TrimSpace(strings.ReplaceAll(raw, "\n", " "))
+		if result == "" {
+			return "", false
+		}
+		if cmd := extractCommandName(result); cmd != "" {
+			if commandFallback == "" {
+				commandFallback = cmd
+			}
+			return "", false
+		}
+		if skipPromptRE.MatchString(result) {
+			return "", false
+		}
+		return truncatePrompt(result), true
+	}
+
 	switch value := content.(type) {
 	case string:
-		prompt := strings.TrimSpace(value)
-		if prompt == "" || skipPromptRE.MatchString(prompt) {
-			if command := extractCommandName(prompt); command != "" {
-				return "", command
-			}
-			return "", ""
+		if prompt, ok := processText(value); ok {
+			return prompt, ""
 		}
-		return truncatePrompt(prompt), extractCommandName(prompt)
+		return "", commandFallback
 	case []any:
-		hasToolResult := false
-		var texts []string
+		// Walk text blocks in order; stop at first valid prompt. tool_result
+		// in the content list disqualifies the whole entry.
 		for _, item := range value {
 			block, ok := item.(map[string]any)
 			if !ok {
 				continue
 			}
-			blockType, _ := block["type"].(string)
-			if blockType == "tool_result" {
-				hasToolResult = true
-				break
-			}
-			if blockType == "text" {
-				if text, ok := block["text"].(string); ok && strings.TrimSpace(text) != "" {
-					texts = append(texts, strings.TrimSpace(text))
+			switch blockType, _ := block["type"].(string); blockType {
+			case "tool_result":
+				return "", ""
+			case "text":
+				text, _ := block["text"].(string)
+				if prompt, ok := processText(text); ok {
+					return prompt, ""
 				}
 			}
 		}
-		if hasToolResult || len(texts) == 0 {
-			return "", ""
-		}
-		prompt := strings.Join(texts, "\n")
-		return truncatePrompt(prompt), extractCommandName(prompt)
+		return "", commandFallback
 	default:
 		return "", ""
 	}
@@ -774,11 +805,14 @@ func parseEntryTimestamp(entry map[string]any) *int64 {
 }
 
 func truncatePrompt(prompt string) string {
+	// Python uses character-count truncation (Python str length is code
+	// points), so Go uses rune count. Trim trailing whitespace before
+	// appending the ellipsis, matching Python's `result[:200].rstrip()`.
 	runes := []rune(prompt)
 	if len(runes) <= 200 {
 		return prompt
 	}
-	return string(runes[:200]) + "..."
+	return strings.TrimRight(string(runes[:200]), " \t") + "…"
 }
 
 func extractCommandName(text string) string {
@@ -927,15 +961,24 @@ func sanitizePath(name string) string {
 	return sanitized[:maxSanitizedLength] + "-" + hash
 }
 
+// simpleHash computes the JS `hash | 0` style 32-bit signed integer hash
+// used by the Claude Code CLI for project directory naming, then encodes
+// the absolute value in base-36.
+//
+// Mirrors Python's `_simple_hash`. Critically: when `h` lands on the int32
+// minimum value (-2^31), `-h` would overflow back to the same value in
+// two's-complement int32 arithmetic. Cast to int64 before negation so the
+// abs is correct (matches Python's `abs()` on a Python `int`).
 func simpleHash(s string) string {
 	h := int32(0)
 	for _, ch := range s {
 		h = h*31 + int32(ch)
 	}
-	if h < 0 {
-		h = -h
+	abs := int64(h)
+	if abs < 0 {
+		abs = -abs
 	}
-	return strings.ToLower(strconvBase36(int64(h)))
+	return strings.ToLower(strconvBase36(abs))
 }
 
 func strconvBase36(v int64) string {
@@ -988,6 +1031,9 @@ func sanitizeUnicode(value string) string {
 	current := value
 	for i := 0; i < 10; i++ {
 		previous := current
+		// NFKC normalization to handle composed character sequences
+		// (Python parity — `unicodedata.normalize("NFKC", current)`).
+		current = norm.NFKC.String(current)
 		current = strings.Map(func(r rune) rune {
 			if unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || unicode.Is(unicode.Cn, r) {
 				return -1

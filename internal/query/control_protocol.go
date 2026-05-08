@@ -24,6 +24,11 @@ type ControlProtocol struct {
 	pendingResponses map[string]*pendingControlResponse
 	responseMu       sync.RWMutex
 
+	// In-flight inbound control requests, keyed by request_id. Cancellable
+	// via control_cancel_request from the CLI (Python SDK fix #751).
+	inflightRequests map[string]context.CancelFunc
+	inflightMu       sync.Mutex
+
 	// Request counter
 	requestCounter int64
 	counterMu      sync.Mutex
@@ -59,6 +64,7 @@ func NewControlProtocol(
 		hookProcessor:    hookProcessor,
 		sdkMCPServers:    sdkMCPServers,
 		pendingResponses: make(map[string]*pendingControlResponse),
+		inflightRequests: make(map[string]context.CancelFunc),
 		ctx:              cpCtx,
 		cancel:           cancel,
 		writeFn:          writeFn,
@@ -289,14 +295,38 @@ func (cp *ControlProtocol) handleControlRequest(data []byte) error {
 		return fmt.Errorf("failed to unmarshal control request: %w", err)
 	}
 
-	// Process in goroutine to avoid blocking message reader
-	go cp.processControlRequest(&request)
+	// Track this request as in-flight so a control_cancel_request from the
+	// CLI can cancel it (Python SDK fix #751).
+	reqCtx, cancelReq := context.WithCancel(cp.ctx)
+	cp.inflightMu.Lock()
+	cp.inflightRequests[request.RequestID] = cancelReq
+	cp.inflightMu.Unlock()
+
+	// Process in goroutine to avoid blocking message reader.
+	go func() {
+		defer func() {
+			cp.inflightMu.Lock()
+			delete(cp.inflightRequests, request.RequestID)
+			cp.inflightMu.Unlock()
+			cancelReq() // ensure context resources released
+		}()
+		cp.processControlRequestCtx(reqCtx, &request)
+	}()
 
 	return nil
 }
 
 // processControlRequest processes a control request and sends response.
+//
+// Deprecated: kept for backwards compatibility; new callers should use
+// processControlRequestCtx so cancellation propagates through inbound handlers.
 func (cp *ControlProtocol) processControlRequest(request *shared.ControlRequest) {
+	cp.processControlRequestCtx(cp.ctx, request)
+}
+
+// processControlRequestCtx processes a control request under a per-request
+// context that the matching control_cancel_request can cancel.
+func (cp *ControlProtocol) processControlRequestCtx(ctx context.Context, request *shared.ControlRequest) {
 	var responseData map[string]any
 	var err error
 
@@ -312,6 +342,12 @@ func (cp *ControlProtocol) processControlRequest(request *shared.ControlRequest)
 
 	default:
 		err = fmt.Errorf("unsupported control request subtype: %s", request.Request.Subtype)
+	}
+
+	// If the CLI cancelled this request mid-flight, don't bother writing a
+	// response — the CLI has already abandoned it (Python parity).
+	if ctx.Err() != nil {
+		return
 	}
 
 	// Build and send response
@@ -520,9 +556,31 @@ func (cp *ControlProtocol) handleMCPMessage(data map[string]any) (map[string]any
 	}, nil
 }
 
-// handleControlCancel handles control cancellation request.
+// handleControlCancel handles a control_cancel_request from the CLI.
+//
+// Cancels the matching in-flight inbound request (e.g. a long-running hook
+// callback or canUseTool prompt) so resources are released and we don't
+// write a stale response the CLI has already abandoned. Mirrors Python SDK
+// fix #751.
 func (cp *ControlProtocol) handleControlCancel(data []byte) error {
-	// TODO: Implement cancellation support
+	var msg struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("failed to unmarshal control_cancel_request: %w", err)
+	}
+	if msg.RequestID == "" {
+		return nil
+	}
+	cp.inflightMu.Lock()
+	cancel, ok := cp.inflightRequests[msg.RequestID]
+	if ok {
+		delete(cp.inflightRequests, msg.RequestID)
+	}
+	cp.inflightMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	return nil
 }
 

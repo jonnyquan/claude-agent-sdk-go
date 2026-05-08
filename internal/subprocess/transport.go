@@ -188,18 +188,38 @@ func (t *Transport) Connect(ctx context.Context) error {
 	//nolint:gosec // G204: This is the core CLI SDK functionality - subprocess execution is required
 	t.cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 
-	// Set up environment: system env → user env → SDK vars (SDK always wins)
-	env := os.Environ()
+	// Set up environment with the same precedence order as Python's
+	// SubprocessCLITransport.connect:
+	//
+	//   1. inherited system env (minus CLAUDECODE)
+	//   2. CLAUDE_CODE_ENTRYPOINT default (callers may override via ExtraEnv)
+	//   3. user-supplied ExtraEnv overrides #1 and #2
+	//   4. CLAUDE_AGENT_SDK_VERSION — SDK-controlled, overrides everything
+	//
+	// CLAUDECODE is filtered so SDK-spawned subprocesses don't think they're
+	// running inside a Claude Code parent (Python SDK fix #573 / #732).
+	env := make([]string, 0, len(os.Environ()))
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "CLAUDECODE=") {
+			continue
+		}
+		env = append(env, kv)
+	}
 
-	// Merge custom environment variables (user-provided, can be overridden by SDK vars)
+	// CLAUDE_CODE_ENTRYPOINT default — user ExtraEnv (appended below) can
+	// override this if they want a custom entrypoint name.
+	env = append(env, "CLAUDE_CODE_ENTRYPOINT="+t.entrypoint)
+
+	// Merge user-supplied env (overrides system env and the default
+	// CLAUDE_CODE_ENTRYPOINT).
 	if t.options != nil && t.options.ExtraEnv != nil {
 		for key, value := range t.options.ExtraEnv {
 			env = append(env, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
 
-	// SDK identifier vars come last (override all, matching Python SDK behavior)
-	env = append(env, "CLAUDE_CODE_ENTRYPOINT="+t.entrypoint)
+	// SDK version is always SDK-controlled — appended LAST so it wins over
+	// any caller value.
 	if t.sdkVersion != "" {
 		env = append(env, fmt.Sprintf("CLAUDE_AGENT_SDK_VERSION=%s", t.sdkVersion))
 	}
@@ -222,6 +242,15 @@ func (t *Transport) Connect(ctx context.Context) error {
 	// Apply environment to command
 	t.cmd.Env = env
 
+	// Run subprocess as the named user when WithUser is set (Python parity:
+	// `user=options.user` argument to `anyio.open_process`). Unix-only;
+	// Windows returns an error if the option was actually requested.
+	if t.options != nil {
+		if err := applyUserOption(t.cmd, t.options.User); err != nil {
+			return shared.NewConnectionError(err.Error(), err)
+		}
+	}
+
 	// Set up I/O pipes - always create stdin for streaming mode
 	var err error
 	t.stdin, err = t.cmd.StdinPipe()
@@ -234,11 +263,16 @@ func (t *Transport) Connect(ctx context.Context) error {
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	// Capture stderr with pipe for error visibility
-	// Using pipe + goroutine to prevent deadlocks while maintaining error diagnostics
-	stderrPipe, err := t.cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	// Pipe stderr only when the caller registered a callback (Python parity:
+	// `stderr_dest = PIPE if self._options.stderr is not None else None`).
+	// Without this gating, every CLI debug line would land on errChan as a
+	// fake error, polluting the consumer's error channel.
+	var stderrPipe io.ReadCloser
+	if t.options != nil && t.options.Stderr != nil {
+		stderrPipe, err = t.cmd.StderrPipe()
+		if err != nil {
+			return fmt.Errorf("failed to create stderr pipe: %w", err)
+		}
 	}
 
 	// Start the process
@@ -259,9 +293,11 @@ func (t *Transport) Connect(ctx context.Context) error {
 	t.msgChan = make(chan shared.Message, channelBufferSize)
 	t.errChan = make(chan error, channelBufferSize)
 
-	// Start stderr reader goroutine
-	t.wg.Add(1)
-	go t.readStderr(stderrPipe)
+	// Start stderr reader goroutine only when stderr is being piped.
+	if stderrPipe != nil {
+		t.wg.Add(1)
+		go t.readStderr(stderrPipe)
+	}
 
 	// Start I/O handling goroutines
 	t.wg.Add(1)
@@ -301,23 +337,13 @@ func (t *Transport) Connect(ctx context.Context) error {
 	// Create control protocol handler
 	t.controlProtocol = query.NewControlProtocol(t.ctx, t.hookProcessor, writeFn, sdkMCPServers)
 
-	// Build agents dict for initialize request
+	// Build agents dict for initialize request — serializes all non-nil
+	// fields (description, prompt, tools, disallowedTools, model, skills,
+	// memory, mcpServers, initialPrompt, maxTurns, background, effort,
+	// permissionMode) to match Python SDK parity.
 	var agentsDict map[string]map[string]any
-	if t.options != nil && len(t.options.Agents) > 0 {
-		agentsDict = make(map[string]map[string]any, len(t.options.Agents))
-		for name, def := range t.options.Agents {
-			entry := map[string]any{
-				"description": def.Description,
-				"prompt":      def.Prompt,
-			}
-			if len(def.Tools) > 0 {
-				entry["tools"] = def.Tools
-			}
-			if def.Model != nil && *def.Model != "" {
-				entry["model"] = *def.Model
-			}
-			agentsDict[name] = entry
-		}
+	if t.options != nil {
+		agentsDict = shared.SerializeAgentDefinitions(t.options.Agents)
 	}
 
 	// Send initialization request to CLI
@@ -557,26 +583,24 @@ func (t *Transport) Close() error {
 	return err
 }
 
-// readStderr reads and logs stderr output from CLI for error diagnostics
+// readStderr reads stderr lines and forwards them to the user-supplied
+// stderr callback. Only spawned when Options.Stderr is non-nil (Python
+// parity — _handle_stderr is the same).
+//
+// Errors during reading are swallowed: stderr is best-effort observability
+// and must not break the main message stream.
 func (t *Transport) readStderr(stderr io.ReadCloser) {
 	defer t.wg.Done()
 	defer stderr.Close()
 
+	cb := t.options.Stderr
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if len(line) > 0 {
-			// If stderr callback is configured, call it
-			if t.options != nil && t.options.Stderr != nil {
-				t.options.Stderr(line)
-			} else {
-				select {
-				case t.errChan <- fmt.Errorf("CLI stderr: %s", line):
-				default:
-					// Channel full, skip (prevent blocking)
-				}
-			}
+		if line == "" {
+			continue
 		}
+		cb(line)
 	}
 }
 
@@ -587,6 +611,16 @@ func (t *Transport) handleStdout() {
 	defer close(t.errChan)
 
 	scanner := bufio.NewScanner(t.stdout)
+	// Honor Options.MaxBufferSize so JSON lines >64KB aren't truncated.
+	// Defaults to parser.MaxBufferSize (1 MiB) — Python parity for the
+	// _DEFAULT_MAX_BUFFER_SIZE constant.
+	maxScannerBuffer := parser.MaxBufferSize
+	if t.options != nil && t.options.MaxBufferSize != nil && *t.options.MaxBufferSize > 0 {
+		maxScannerBuffer = *t.options.MaxBufferSize
+	}
+	if maxScannerBuffer > bufio.MaxScanTokenSize {
+		scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
+	}
 
 	for scanner.Scan() {
 		select {

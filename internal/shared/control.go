@@ -142,6 +142,32 @@ type PermissionResponse struct {
 	UpdatedPermissions []any  `json:"updatedPermissions,omitempty"`
 	Message            string `json:"message,omitempty"`
 	Interrupt          bool   `json:"interrupt,omitempty"`
+
+	// AlwaysEmitMessage disables omitempty on Message so a deny response
+	// always carries the field on the wire (Python parity: emits
+	// `"message": ""` for empty values).
+	AlwaysEmitMessage bool `json:"-"`
+}
+
+// MarshalJSON implements custom JSON marshaling so AlwaysEmitMessage forces
+// `"message"` to be present (even when empty).
+func (p *PermissionResponse) MarshalJSON() ([]byte, error) {
+	out := map[string]any{
+		"behavior": p.Behavior,
+	}
+	if p.UpdatedInput != nil {
+		out["updatedInput"] = p.UpdatedInput
+	}
+	if p.UpdatedPermissions != nil {
+		out["updatedPermissions"] = p.UpdatedPermissions
+	}
+	if p.AlwaysEmitMessage || p.Message != "" {
+		out["message"] = p.Message
+	}
+	if p.Interrupt {
+		out["interrupt"] = p.Interrupt
+	}
+	return marshalJSON(out)
 }
 
 // HookCallbackResponse represents the response to hook_callback request.
