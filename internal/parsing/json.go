@@ -443,6 +443,32 @@ func (p *Parser) parseSystemMessage(data map[string]any) (shared.Message, error)
 			ToolUseID:     stringPtr(data, "tool_use_id"),
 			Usage:         usage,
 		}, nil
+	case "task_updated":
+		// Terminal task completion sometimes arrives only as a task_updated
+		// patch (no separate task_notification), so expose it as a typed
+		// lifecycle message rather than a generic SystemMessage. Parsed
+		// defensively: the patch may omit uuid/session_id and parsing must
+		// never fail on a lifecycle event.
+		patch, _ := data["patch"].(map[string]any)
+		if patch == nil {
+			patch = map[string]any{}
+		}
+		// Terminal-ness is derived from patch.status; a patch that carries only
+		// end_time/result/error (no status) is left non-terminal (empty status)
+		// — the full patch is still preserved on Patch for callers that need more.
+		var status shared.TaskUpdatedStatus
+		if s, ok := patch["status"].(string); ok {
+			status = shared.TaskUpdatedStatus(s)
+		}
+		taskID, _ := data["task_id"].(string)
+		return &shared.TaskUpdatedMessage{
+			SystemMessage: base,
+			TaskID:        taskID,
+			Patch:         patch,
+			Status:        status,
+			SessionID:     stringPtr(data, "session_id"),
+			UUID:          stringPtr(data, "uuid"),
+		}, nil
 	default:
 		return &base, nil
 	}

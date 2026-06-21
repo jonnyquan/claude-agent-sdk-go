@@ -616,6 +616,43 @@ const (
 	TaskNotificationStatusStopped   TaskNotificationStatus = "stopped"
 )
 
+// TaskUpdatedStatus represents the status reported inside a task_updated patch.
+//
+// "pending"/"running"/"paused" are non-terminal; "completed"/"failed"/"killed"
+// are terminal. Note task_updated reports the raw "killed"; the CLI maps that to
+// "stopped" only when it emits a task_notification.
+type TaskUpdatedStatus string
+
+const (
+	TaskUpdatedStatusPending   TaskUpdatedStatus = "pending"
+	TaskUpdatedStatusRunning   TaskUpdatedStatus = "running"
+	TaskUpdatedStatusPaused    TaskUpdatedStatus = "paused"
+	TaskUpdatedStatusCompleted TaskUpdatedStatus = "completed"
+	TaskUpdatedStatusFailed    TaskUpdatedStatus = "failed"
+	TaskUpdatedStatusKilled    TaskUpdatedStatus = "killed"
+)
+
+// TerminalTaskStatuses is the set of task statuses that mean the task has
+// finished and should be cleared from any "active task" tracking. This set
+// spans both lifecycle vocabularies: task_notification reports "stopped" (the
+// CLI's mapped form of a killed task) while task_updated reports the raw
+// "killed". Consumers should treat the status of a TaskNotificationMessage and a
+// TaskUpdatedMessage the same way. Use IsTerminalTaskStatus for membership tests.
+var TerminalTaskStatuses = map[string]struct{}{
+	"completed": {},
+	"failed":    {},
+	"stopped":   {},
+	"killed":    {},
+}
+
+// IsTerminalTaskStatus reports whether status indicates the task has finished,
+// across both the task_notification ("stopped") and task_updated ("killed")
+// vocabularies. See TerminalTaskStatuses.
+func IsTerminalTaskStatus(status string) bool {
+	_, ok := TerminalTaskStatuses[status]
+	return ok
+}
+
 // TaskStartedMessage represents a system task_started event.
 type TaskStartedMessage struct {
 	SystemMessage
@@ -640,6 +677,11 @@ type TaskProgressMessage struct {
 }
 
 // TaskNotificationMessage represents a system task_notification event.
+//
+// Note: not every terminal task emits this message. Background tasks may instead
+// report completion only via a TaskUpdatedMessage whose Patch["status"] is
+// terminal (see TerminalTaskStatuses). Consumers tracking active task IDs should
+// clear them on a terminal status from either message — see TaskUpdatedMessage.
 type TaskNotificationMessage struct {
 	SystemMessage
 	TaskID     string                 `json:"task_id"`
@@ -650,6 +692,33 @@ type TaskNotificationMessage struct {
 	SessionID  string                 `json:"session_id"`
 	ToolUseID  *string                `json:"tool_use_id,omitempty"`
 	Usage      *TaskUsage             `json:"usage,omitempty"`
+}
+
+// TaskUpdatedMessage represents a system task_updated event emitted when a
+// background task's state changes.
+//
+// The CLI emits system/task_updated events as a task moves through its
+// lifecycle. Patch carries the changed fields (e.g. "status", "end_time"); when
+// Patch["status"] is terminal (see TerminalTaskStatuses) the task has finished.
+//
+// Lifecycle note: a background task's terminal state can arrive only as a
+// TaskUpdatedMessage with no accompanying TaskNotificationMessage — for example
+// a task stopped via TaskStop reports Status="killed" here, and the matching
+// notification is sometimes suppressed. Consumers that track active task IDs
+// should therefore clear them on a terminal status (see IsTerminalTaskStatus)
+// from either a TaskNotificationMessage or a TaskUpdatedMessage.
+//
+// Parsed defensively: the patch may omit uuid/session_id and parsing never fails
+// on a lifecycle event. Status is derived from Patch["status"]; a patch that
+// carries only end_time/result/error (no status) leaves Status empty — the full
+// patch is still preserved on Patch for callers that need more.
+type TaskUpdatedMessage struct {
+	SystemMessage
+	TaskID    string            `json:"task_id"`
+	Patch     map[string]any    `json:"patch"`
+	Status    TaskUpdatedStatus `json:"status,omitempty"`
+	SessionID *string           `json:"session_id,omitempty"`
+	UUID      *string           `json:"uuid,omitempty"`
 }
 
 // HookEventMessage is emitted by the CLI when ClaudeAgentOptions.IncludeHookEvents

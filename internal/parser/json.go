@@ -477,6 +477,29 @@ func (p *Parser) parseSystemMessage(data map[string]any) (shared.Message, error)
 			ToolUseID:     stringPtr(data, "tool_use_id"),
 			Usage:         usage,
 		}, nil
+	case "task_updated":
+		// Terminal task completion sometimes arrives only as a task_updated
+		// patch (no separate task_notification), so expose it as a typed
+		// lifecycle message rather than a generic SystemMessage. Parsed
+		// defensively: the patch may omit uuid/session_id and parsing must
+		// never fail on a lifecycle event.
+		patch, _ := data["patch"].(map[string]any)
+		if patch == nil {
+			patch = map[string]any{}
+		}
+		var status shared.TaskUpdatedStatus
+		if s, ok := patch["status"].(string); ok {
+			status = shared.TaskUpdatedStatus(s)
+		}
+		taskID, _ := data["task_id"].(string)
+		return &shared.TaskUpdatedMessage{
+			SystemMessage: base,
+			TaskID:        taskID,
+			Patch:         patch,
+			Status:        status,
+			SessionID:     stringPtr(data, "session_id"),
+			UUID:          stringPtr(data, "uuid"),
+		}, nil
 	case "mirror_error":
 		// SDK-synthesized via reportMirrorError — never emitted by the CLI subprocess.
 		errMsg := ""

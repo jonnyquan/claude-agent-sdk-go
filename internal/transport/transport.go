@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"sort"
@@ -643,7 +644,20 @@ func (t *Transport) readStderr(stderr io.ReadCloser) {
 		if line == "" {
 			continue
 		}
-		cb(line)
+		// Isolate per-line so a panic in the user's callback doesn't terminate
+		// the loop and silently drop every subsequent line for the rest of the
+		// session.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("stderr callback panicked; continuing: %v", r)
+				}
+			}()
+			cb(line)
+		}()
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("stderr stream read failed: %v", err)
 	}
 }
 

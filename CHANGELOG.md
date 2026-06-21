@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.2.106
+
+Synced with the Python SDK at v0.2.106 to keep the two SDKs at 1:1 parity.
+
+### Features
+
+- **Typed `task_updated` lifecycle events**: Terminal `system/task_updated`
+  events are now exposed as a typed `TaskUpdatedMessage` carrying `TaskID`,
+  `Patch`, `Status`, `SessionID`, and `UUID`. A background task's terminal
+  state sometimes arrives only as a `task_updated` patch (for example a task
+  stopped via `TaskStop` reports `Status="killed"`) with no accompanying
+  `TaskNotificationMessage` — consumers tracking active task IDs should clear
+  them on a terminal status from either message. Added the `TaskUpdatedStatus`
+  type, the `TerminalTaskStatuses` set, and the `IsTerminalTaskStatus` helper
+  (which spans both the `task_notification` "stopped" and `task_updated`
+  "killed" vocabularies). Parsing is defensive: a missing/non-object `patch`
+  falls back to an empty patch and never fails.
+
+### Bug Fixes
+
+- **Stderr callback isolation**: A user-provided `Stderr` callback that panics
+  no longer terminates the stderr reader goroutine and silently drops every
+  subsequent line for the rest of the session. Panics are now recovered
+  per-line so a failing callback does not prevent delivery of later lines.
+  Stream read errors are now logged instead of swallowed.
+- **Shielded final transcript-mirror flush**: `TranscriptMirrorBatcher.Close`
+  now runs its final flush under `context.WithoutCancel` so the last batch
+  still reaches the session store when teardown happens under a cancelled
+  context (client disconnect / Ctrl+C). Per-append timeouts still bound the
+  work.
+
+### Documentation
+
+- Clarified that `Hooks` dispatch for a given event is concurrent (all matchers
+  fire in parallel), not sequential — design each hook to be independent.
+
+### Internal/Other Changes
+
+- Updated bundled Claude CLI to version 2.1.185.
+- Bumped SDK version to 0.2.106.
+
+> Note: the Python 0.2.x line also ported its session-store code paths from raw
+> `asyncio` primitives to `anyio` for trio compatibility. That change is
+> Python-runtime-specific (asyncio vs trio); the Go SDK already uses
+> context-first goroutines/channels, so the only portable behavioral change —
+> shielding the final mirror flush on cancellation — is included above.
+
 ## 0.1.77 (continued — twelfth pass)
 
 ### Bug Fixes

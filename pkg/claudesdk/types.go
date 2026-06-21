@@ -24,7 +24,21 @@ type TaskStartedMessage = shared.TaskStartedMessage
 type TaskProgressMessage = shared.TaskProgressMessage
 type TaskNotificationMessage = shared.TaskNotificationMessage
 type TaskNotificationStatus = shared.TaskNotificationStatus
+
+// TaskUpdatedMessage represents a system task_updated event (background task
+// lifecycle change). See shared.TaskUpdatedMessage.
+type TaskUpdatedMessage = shared.TaskUpdatedMessage
+
+// TaskUpdatedStatus is the status reported inside a task_updated patch.
+type TaskUpdatedStatus = shared.TaskUpdatedStatus
 type TaskUsage = shared.TaskUsage
+
+// IsTerminalTaskStatus reports whether a task status (from either a
+// TaskNotificationMessage or a TaskUpdatedMessage) means the task has finished.
+var IsTerminalTaskStatus = shared.IsTerminalTaskStatus
+
+// TerminalTaskStatuses is the set of task statuses that mean a task has finished.
+var TerminalTaskStatuses = shared.TerminalTaskStatuses
 
 // HookEventMessage is emitted when ClaudeAgentOptions.IncludeHookEvents is true.
 type HookEventMessage = shared.HookEventMessage
@@ -147,6 +161,12 @@ const (
 	TaskNotificationStatusCompleted = shared.TaskNotificationStatusCompleted
 	TaskNotificationStatusFailed    = shared.TaskNotificationStatusFailed
 	TaskNotificationStatusStopped   = shared.TaskNotificationStatusStopped
+	TaskUpdatedStatusPending        = shared.TaskUpdatedStatusPending
+	TaskUpdatedStatusRunning        = shared.TaskUpdatedStatusRunning
+	TaskUpdatedStatusPaused         = shared.TaskUpdatedStatusPaused
+	TaskUpdatedStatusCompleted      = shared.TaskUpdatedStatusCompleted
+	TaskUpdatedStatusFailed         = shared.TaskUpdatedStatusFailed
+	TaskUpdatedStatusKilled         = shared.TaskUpdatedStatusKilled
 	RateLimitStatusAllowed          = shared.RateLimitStatusAllowed
 	RateLimitStatusAllowedWarning   = shared.RateLimitStatusAllowedWarning
 	RateLimitStatusRejected         = shared.RateLimitStatusRejected

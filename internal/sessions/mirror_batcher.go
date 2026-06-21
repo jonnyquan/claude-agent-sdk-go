@@ -194,12 +194,17 @@ func (b *TranscriptMirrorBatcher) Flush(ctx context.Context) {
 
 // Close performs a final flush before teardown. Safe to call multiple times;
 // subsequent Enqueue calls become no-ops.
+//
+// The final flush is shielded from cancellation (via context.WithoutCancel) so
+// the last batch still reaches the store when Close runs under a cancelled
+// context (client disconnect / Ctrl+C at teardown). Per-append timeouts still
+// bound the work, so it cannot hang indefinitely.
 func (b *TranscriptMirrorBatcher) Close(ctx context.Context) {
 	if b == nil {
 		return
 	}
 	b.closed.Set(true)
-	b.Flush(ctx)
+	b.Flush(context.WithoutCancel(ctx))
 }
 
 // drain detaches the pending buffer, awaits any prior flush, then sends.

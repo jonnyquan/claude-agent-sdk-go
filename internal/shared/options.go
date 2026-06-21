@@ -164,6 +164,11 @@ type Options struct {
 	// Hooks for intercepting and controlling SDK behavior
 	// Key: HookEvent type (e.g., "PreToolUse", "PostToolUse")
 	// Value: List of hook matchers with their callbacks
+	//
+	// Dispatch order: multiple matchers registered on the same event are
+	// dispatched concurrently by the CLI — all hook callback control requests
+	// for a given event fire in parallel, not sequentially. Design each hook to
+	// be independent; do not rely on one completing before another starts.
 	Hooks map[string][]any `json:"hooks,omitempty"`
 
 	// Stderr callback for CLI debug output
