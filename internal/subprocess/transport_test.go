@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -20,7 +19,7 @@ func TestTransportLifecycle(t *testing.T) {
 	defer cancel()
 
 	// Test basic lifecycle
-	transport := setupTransportForTest(t, newTransportMockCLI())
+	transport := setupTransportForTest(t, newTransportMockCLI(t))
 	defer disconnectTransportSafely(t, transport)
 
 	// Initial state should be disconnected
@@ -48,7 +47,7 @@ func TestTransportMessageIO(t *testing.T) {
 	ctx, cancel := setupTransportTestContext(t, 10*time.Second)
 	defer cancel()
 
-	transport := setupTransportForTest(t, newTransportMockCLI())
+	transport := setupTransportForTest(t, newTransportMockCLI(t))
 	defer disconnectTransportSafely(t, transport)
 
 	connectTransportSafely(ctx, t, transport)
@@ -86,7 +85,7 @@ func TestTransportProcessManagement(t *testing.T) {
 
 	// Test 5-second termination sequence
 	t.Run("five_second_termination", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLIWithOptions(WithLongRunning()))
+		transport := setupTransportForTest(t, newTransportMockCLIWithOptions(t, WithLongRunning()))
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -112,7 +111,7 @@ func TestTransportProcessManagement(t *testing.T) {
 			t.Skip("Interrupt not supported on Windows")
 		}
 
-		transport := setupTransportForTest(t, newTransportMockCLI())
+		transport := setupTransportForTest(t, newTransportMockCLI(t))
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -140,18 +139,21 @@ func TestTransportErrorHandling(t *testing.T) {
 		{
 			name: "connection_with_failing_cli",
 			setupTransport: func() *Transport {
-				return setupTransportForTest(t, newTransportMockCLIWithOptions(WithFailure()))
+				return setupTransportForTest(t, newTransportMockCLIWithOptions(t, WithFailure()))
 			},
 			operation: func(tr *Transport) error {
 				return tr.Connect(ctx)
 			},
-			expectError:   false, // Connection should succeed initially even if CLI fails
-			errorContains: "",
+			// Connect completes the initialize handshake before returning, so
+			// a CLI that dies on startup fails the connection rather than
+			// leaving a half-usable transport behind.
+			expectError:   true,
+			errorContains: "initialize",
 		},
 		{
 			name: "send_to_disconnected_transport",
 			setupTransport: func() *Transport {
-				return setupTransportForTest(t, newTransportMockCLI())
+				return setupTransportForTest(t, newTransportMockCLI(t))
 			},
 			operation: func(tr *Transport) error {
 				// Don't connect - send to disconnected transport
@@ -164,7 +166,7 @@ func TestTransportErrorHandling(t *testing.T) {
 		{
 			name: "context_cancellation",
 			setupTransport: func() *Transport {
-				return setupTransportForTest(t, newTransportMockCLI())
+				return setupTransportForTest(t, newTransportMockCLI(t))
 			},
 			operation: func(tr *Transport) error {
 				connectTransportSafely(ctx, t, tr)
@@ -206,7 +208,7 @@ func TestTransportConcurrency(t *testing.T) {
 	ctx, cancel := setupTransportTestContext(t, 15*time.Second)
 	defer cancel()
 
-	transport := setupTransportForTest(t, newTransportMockCLI())
+	transport := setupTransportForTest(t, newTransportMockCLI(t))
 	defer disconnectTransportSafely(t, transport)
 
 	connectTransportSafely(ctx, t, transport)
@@ -274,7 +276,7 @@ func TestTransportEnvironmentSetup(t *testing.T) {
 	ctx, cancel := setupTransportTestContext(t, 10*time.Second)
 	defer cancel()
 
-	transport := setupTransportForTest(t, newTransportMockCLIWithOptions(WithEnvironmentCheck()))
+	transport := setupTransportForTest(t, newTransportMockCLIWithOptions(t, WithEnvironmentCheck()))
 	defer disconnectTransportSafely(t, transport)
 
 	// Connection should succeed with proper environment setup
@@ -294,7 +296,7 @@ func TestTransportReceiveMessagesNotConnected(t *testing.T) {
 	ctx, cancel := setupTransportTestContext(t, 5*time.Second)
 	defer cancel()
 
-	transport := setupTransportForTest(t, newTransportMockCLI())
+	transport := setupTransportForTest(t, newTransportMockCLI(t))
 
 	// Test ReceiveMessages on disconnected transport
 	msgChan, errChan := transport.ReceiveMessages(ctx)
@@ -379,108 +381,31 @@ func WithInvalidOutput() TransportMockOption {
 	}
 }
 
-func newTransportMockCLI() string {
-	return newTransportMockCLIWithOptions()
+func newTransportMockCLI(t *testing.T) string {
+	t.Helper()
+	return newTransportMockCLIWithOptions(t)
 }
 
-func newTransportMockCLIWithOptions(options ...TransportMockOption) string {
+func newTransportMockCLIWithOptions(t *testing.T, options ...TransportMockOption) string {
+	t.Helper()
+
 	opts := &transportMockOptions{}
 	for _, opt := range options {
 		opt(opts)
 	}
 
-	var script string
-	var extension string
-
-	if runtime.GOOS == "windows" {
-		extension = ".bat"
-		switch {
-		case opts.shouldFail:
-			script = `@echo off
-echo Mock CLI failing >&2
-exit /b 1
-`
-		case opts.longRunning:
-			script = `@echo off
-echo {"type":"assistant","content":[{"type":"text","text":"Long running mock"}],"model":"claude-3"}
-timeout /t 30 /nobreak > NUL
-`
-		case opts.checkEnvironment:
-			script = `@echo off
-if "%CLAUDE_CODE_ENTRYPOINT%"=="sdk-go" (
-    echo {"type":"assistant","content":[{"type":"text","text":"Environment OK"}],"model":"claude-3"}
-) else (
-    echo Missing environment variable >&2
-    exit /b 1
-)
-timeout /t 1 /nobreak > NUL
-`
-		case opts.invalidOutput:
-			script = `@echo off
-echo This is not valid JSON output
-echo {"invalid": json}
-echo {"type":"assistant","content":[{"type":"text","text":"Valid after invalid"}],"model":"claude-3"}
-timeout /t 1 /nobreak > NUL
-`
-		default:
-			script = `@echo off
-echo {"type":"assistant","content":[{"type":"text","text":"Mock response"}],"model":"claude-3"}
-timeout /t 1 /nobreak > NUL
-`
-		}
-	} else {
-		extension = ""
-		switch {
-		case opts.shouldFail:
-			script = `#!/bin/bash
-echo "Mock CLI failing" >&2
-exit 1
-`
-		case opts.longRunning:
-			script = `#!/bin/bash
-# Ignore SIGTERM initially to test 5-second timeout
-trap 'echo "Received SIGTERM, ignoring for 6 seconds"; sleep 6; exit 1' TERM
-echo '{"type":"assistant","content":[{"type":"text","text":"Long running mock"}],"model":"claude-3"}'
-sleep 30  # Run long enough to test termination
-`
-		case opts.checkEnvironment:
-			script = `#!/bin/bash
-if [ "$CLAUDE_CODE_ENTRYPOINT" = "sdk-go" ]; then
-    echo '{"type":"assistant","content":[{"type":"text","text":"Environment OK"}],"model":"claude-3"}'
-else
-    echo "Missing environment variable" >&2
-    exit 1
-fi
-sleep 0.5
-`
-		case opts.invalidOutput:
-			script = `#!/bin/bash
-echo "This is not valid JSON output"
-echo '{"invalid": json}'
-echo '{"type":"assistant","content":[{"type":"text","text":"Valid after invalid"}],"model":"claude-3"}'
-sleep 0.5
-`
-		default:
-			script = `#!/bin/bash
-echo '{"type":"assistant","content":[{"type":"text","text":"Mock response"}],"model":"claude-3"}'
-sleep 0.5
-`
-		}
+	switch {
+	case opts.shouldFail:
+		return buildMockCLI(t, "failure")
+	case opts.longRunning:
+		return buildMockCLI(t, "longrunning")
+	case opts.checkEnvironment:
+		return buildMockCLI(t, "envcheck")
+	case opts.invalidOutput:
+		return buildMockCLI(t, "invalidoutput")
+	default:
+		return buildMockCLI(t, "default")
 	}
-
-	return createTransportTempScript(script, extension)
-}
-
-func createTransportTempScript(script, extension string) string {
-	tempDir := os.TempDir()
-	scriptPath := filepath.Join(tempDir, fmt.Sprintf("mock-claude-%d%s", time.Now().UnixNano(), extension))
-
-	err := os.WriteFile(scriptPath, []byte(script), 0o755) // #nosec G306 - Test script needs to be executable
-	if err != nil {
-		panic(fmt.Sprintf("Failed to create mock CLI script: %v", err))
-	}
-
-	return scriptPath
 }
 
 // Helper functions following client_test.go patterns
@@ -572,7 +497,7 @@ func TestTransportConnectErrorPaths(t *testing.T) {
 		{
 			name: "already_connected_error",
 			setup: func() *Transport {
-				transport := setupTransportForTest(t, newTransportMockCLI())
+				transport := setupTransportForTest(t, newTransportMockCLI(t))
 				connectTransportSafely(ctx, t, transport)
 				return transport
 			},
@@ -582,7 +507,7 @@ func TestTransportConnectErrorPaths(t *testing.T) {
 			name: "invalid_working_directory",
 			setup: func() *Transport {
 				options := &shared.Options{Cwd: stringPtr("/nonexistent/directory/path")}
-				return New(newTransportMockCLI(), options, "sdk-go", testSDKVersion)
+				return New(newTransportMockCLI(t), options, "sdk-go", testSDKVersion)
 			},
 			wantError: true,
 		},
@@ -617,7 +542,7 @@ func TestTransportSendMessageEdgeCases(t *testing.T) {
 
 	// Test SendMessage with promptArg transport (one-shot mode)
 	t.Run("send_message_with_prompt_arg", func(t *testing.T) {
-		transport := NewWithPrompt(newTransportMockCLI(), &shared.Options{}, "test prompt", testSDKVersion)
+		transport := NewWithPrompt(newTransportMockCLI(t), &shared.Options{}, "test prompt", testSDKVersion)
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -630,7 +555,7 @@ func TestTransportSendMessageEdgeCases(t *testing.T) {
 
 	// Test SendMessage with invalid JSON
 	t.Run("send_message_marshal_error", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLI())
+		transport := setupTransportForTest(t, newTransportMockCLI(t))
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -644,7 +569,7 @@ func TestTransportSendMessageEdgeCases(t *testing.T) {
 
 	// Test context cancellation during send
 	t.Run("context_cancelled_during_send", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLI())
+		transport := setupTransportForTest(t, newTransportMockCLI(t))
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -672,7 +597,7 @@ func TestTransportTerminateProcessPaths(t *testing.T) {
 
 	// Test normal termination
 	t.Run("normal_termination", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLI())
+		transport := setupTransportForTest(t, newTransportMockCLI(t))
 		connectTransportSafely(ctx, t, transport)
 
 		// Close should trigger terminateProcess
@@ -682,7 +607,7 @@ func TestTransportTerminateProcessPaths(t *testing.T) {
 
 	// Test SIGTERM timeout (force SIGKILL)
 	t.Run("sigterm_timeout_force_kill", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLIWithOptions(WithLongRunning()))
+		transport := setupTransportForTest(t, newTransportMockCLIWithOptions(t, WithLongRunning()))
 		connectTransportSafely(ctx, t, transport)
 
 		// This transport ignores SIGTERM for 6 seconds, forcing SIGKILL
@@ -702,7 +627,7 @@ func TestTransportTerminateProcessPaths(t *testing.T) {
 		// Create a context that we can cancel
 		shortCtx, shortCancel := context.WithCancel(ctx)
 
-		transport := setupTransportForTest(t, newTransportMockCLI())
+		transport := setupTransportForTest(t, newTransportMockCLI(t))
 
 		// Connect with the cancellable context
 		connectTransportSafely(shortCtx, t, transport)
@@ -723,7 +648,7 @@ func TestTransportHandleStdoutErrorPaths(t *testing.T) {
 
 	// Test stdout parsing errors
 	t.Run("stdout_parsing_errors", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLIWithOptions(WithInvalidOutput()))
+		transport := setupTransportForTest(t, newTransportMockCLIWithOptions(t, WithInvalidOutput()))
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -753,7 +678,7 @@ func TestTransportHandleStdoutErrorPaths(t *testing.T) {
 
 	// Test scanner error conditions
 	t.Run("scanner_error_handling", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLI())
+		transport := setupTransportForTest(t, newTransportMockCLI(t))
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -764,25 +689,32 @@ func TestTransportHandleStdoutErrorPaths(t *testing.T) {
 		// Close transport to trigger scanner completion
 		disconnectTransportSafely(t, transport)
 
-		// Channels should be closed after transport close
-		select {
-		case _, ok := <-msgChan:
-			if ok {
-				t.Error("Expected message channel to be closed")
-			}
-		case <-time.After(1 * time.Second):
-			t.Error("Expected message channel to be closed promptly")
-		}
-
-		select {
-		case _, ok := <-errChan:
-			if ok {
-				t.Error("Expected error channel to be closed")
-			}
-		case <-time.After(1 * time.Second):
-			t.Error("Expected error channel to be closed promptly")
-		}
+		// Both channels must end up closed after Close. Drain rather than
+		// asserting on the first receive: anything the CLI emitted before the
+		// close is legitimately still buffered and gets delivered first.
+		assertChannelDrainsAndCloses(t, "message", msgChan)
+		assertChannelDrainsAndCloses(t, "error", errChan)
 	})
+}
+
+// assertChannelDrainsAndCloses reads ch until it is closed, failing if that
+// does not happen promptly. Buffered values are expected — the assertion is
+// about the channel being closed, not about it being empty.
+func assertChannelDrainsAndCloses[T any](t *testing.T, name string, ch <-chan T) {
+	t.Helper()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Errorf("Expected %s channel to be closed promptly", name)
+			return
+		}
+	}
 }
 
 // TestTransportInterruptErrorPaths tests uncovered Interrupt scenarios
@@ -792,7 +724,7 @@ func TestTransportInterruptErrorPaths(t *testing.T) {
 
 	// Test interrupt on disconnected transport
 	t.Run("interrupt_disconnected_transport", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLI())
+		transport := setupTransportForTest(t, newTransportMockCLI(t))
 
 		// Don't connect - test interrupt on disconnected transport
 		err := transport.Interrupt(ctx)
@@ -803,7 +735,7 @@ func TestTransportInterruptErrorPaths(t *testing.T) {
 
 	// Test interrupt with nil process
 	t.Run("interrupt_nil_process", func(t *testing.T) {
-		transport := setupTransportForTest(t, newTransportMockCLI())
+		transport := setupTransportForTest(t, newTransportMockCLI(t))
 		defer disconnectTransportSafely(t, transport)
 
 		connectTransportSafely(ctx, t, transport)
@@ -818,7 +750,7 @@ func TestTransportInterruptErrorPaths(t *testing.T) {
 
 	if runtime.GOOS != "windows" {
 		t.Run("interrupt_signal_error", func(t *testing.T) {
-			transport := setupTransportForTest(t, newTransportMockCLI())
+			transport := setupTransportForTest(t, newTransportMockCLI(t))
 			defer disconnectTransportSafely(t, transport)
 
 			connectTransportSafely(ctx, t, transport)
@@ -943,8 +875,11 @@ func TestSubprocessEnvironmentVariables(t *testing.T) {
 			ctx, cancel := setupSubprocessTestContext(t)
 			defer cancel()
 
-			// Create transport with test options
-			transport := New("echo", tt.options, "sdk-go", testSDKVersion)
+			// Create transport with test options. Uses the mock CLI rather
+			// than `echo` because Connect now completes the initialize
+			// handshake before returning, which a CLI that exits immediately
+			// can never answer.
+			transport := New(newTransportMockCLI(t), tt.options, "sdk-go", testSDKVersion)
 			defer func() {
 				if transport.IsConnected() {
 					_ = transport.Close()

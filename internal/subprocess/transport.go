@@ -308,10 +308,6 @@ func (t *Transport) Connect(ctx context.Context) error {
 		go t.readStderr(stderrPipe)
 	}
 
-	// Start I/O handling goroutines
-	t.wg.Add(1)
-	go t.handleStdout()
-
 	// Always initialize control protocol for streaming mode
 
 	// Create hook processor if hooks are configured
@@ -319,16 +315,18 @@ func (t *Transport) Connect(ctx context.Context) error {
 		t.hookProcessor = query.NewHookProcessor(t.ctx, t.options)
 	}
 
-	// Create write function for control protocol
+	// Create write function for control protocol.
+	// IMPORTANT: capture stdin instead of re-reading t.stdin under t.mu.
+	// Connect still holds the write lock here, and Go's RWMutex is not
+	// reentrant, so an RLock would deadlock the initialize handshake below;
+	// t.connected is also still false at that point, so the guard would have
+	// rejected every initialize write even without the deadlock.
+	stdin := t.stdin
 	writeFn := func(data []byte) error {
-		t.mu.RLock()
-		defer t.mu.RUnlock()
-
-		if !t.connected || t.stdin == nil {
-			return fmt.Errorf("transport not connected")
+		if stdin == nil {
+			return fmt.Errorf("transport stdin not initialized")
 		}
-
-		_, err := t.stdin.Write(data)
+		_, err := stdin.Write(data)
 		return err
 	}
 
@@ -345,6 +343,13 @@ func (t *Transport) Connect(ctx context.Context) error {
 
 	// Create control protocol handler
 	t.controlProtocol = query.NewControlProtocol(t.ctx, t.hookProcessor, writeFn, sdkMCPServers)
+
+	// Start the stdout reader only now: it is the goroutine that routes
+	// control_response frames back to the protocol, so starting it before
+	// t.controlProtocol is assigned races the initialize handshake's own
+	// response against the write of the field that handles it.
+	t.wg.Add(1)
+	go t.handleStdout()
 
 	// Build agents dict for initialize request — serializes all non-nil
 	// fields (description, prompt, tools, disallowedTools, model, skills,
@@ -619,6 +624,12 @@ func (t *Transport) handleStdout() {
 	defer close(t.msgChan)
 	defer close(t.errChan)
 
+	// Snapshot the control protocol: Connect assigns it before starting this
+	// goroutine, but Close() nils the field out under t.mu, and this goroutine
+	// holds no lock. Reading the field here instead of below keeps the two
+	// from racing, and a protocol handed a frame after Close is harmless.
+	cp := t.controlProtocol
+
 	scanner := bufio.NewScanner(t.stdout)
 	// Honor Options.MaxBufferSize so JSON lines >64KB aren't truncated.
 	// Defaults to parser.MaxBufferSize (1 MiB) — Python parity for the
@@ -652,8 +663,8 @@ func (t *Transport) handleStdout() {
 			if msgType, ok := rawMsg["type"].(string); ok {
 				switch msgType {
 				case "control_request", "control_response", "control_cancel_request":
-					if t.controlProtocol != nil {
-						if err := t.controlProtocol.HandleIncomingMessage(msgType, []byte(line)); err != nil {
+					if cp != nil {
+						if err := cp.HandleIncomingMessage(msgType, []byte(line)); err != nil {
 							// Log error but don't stop processing
 							select {
 							case t.errChan <- fmt.Errorf("control protocol error: %w", err):
@@ -735,13 +746,24 @@ func (t *Transport) handleStdout() {
 	if err := scanner.Err(); err != nil {
 		scanErr := fmt.Errorf("stdout scanner error: %w", err)
 		// Signal all pending control requests so they fail fast instead of timing out
-		if t.controlProtocol != nil {
-			t.controlProtocol.FailPendingRequests(scanErr)
+		if cp != nil {
+			cp.FailPendingRequests(scanErr)
 		}
 		select {
 		case t.errChan <- scanErr:
 		case <-t.ctx.Done():
 		}
+		return
+	}
+
+	// Clean EOF: the CLI closed stdout, so nothing can answer a control
+	// request any more. Fail the pending ones now rather than letting each
+	// burn its full timeout — initialize alone waits 60s, which is what a
+	// caller connecting to a CLI that dies on startup would otherwise pay.
+	if cp != nil {
+		cp.FailPendingRequests(
+			fmt.Errorf("CLI closed stdout before answering the control request"),
+		)
 	}
 }
 

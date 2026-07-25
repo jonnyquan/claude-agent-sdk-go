@@ -117,11 +117,43 @@ release; every one is now fixed and covered by tests.
   now parsed into `ServerToolUseBlock` / `ServerToolResultBlock` instead of
   being skipped as unknown types.
 
+### Bug Fixes — transport connect path
+
+Fixing the two long-standing test failures in the repo surfaced three real
+transport defects; `internal/subprocess`'s transport tests had been hanging
+since streaming-only `Connect` landed, so nothing in that package was actually
+being verified.
+
+- **`Connect` self-deadlocked in `internal/subprocess`**: the control
+  protocol's write function took `t.mu.RLock()` while `Connect` still held the
+  write lock. Go's `RWMutex` is not reentrant, so the initialize handshake
+  blocked forever; and because `t.connected` was still false at that point, the
+  guard would have rejected the write anyway. The write function now uses the
+  stdin handle captured by `Connect`, matching `internal/transport`.
+- **Data race on `controlProtocol` between the stdout reader and `Close`**: the
+  reader read the field with no lock while `Close` nils it out under `t.mu`. The
+  stdout goroutine now snapshots the protocol, and it starts only after the
+  field is assigned rather than before — the previous order also raced the
+  initialize response against the write of the field meant to handle it. Both
+  transports.
+- **A CLI that dies before answering a control request cost a full timeout**:
+  on a clean stdout EOF neither transport failed the pending requests, so a
+  connect against a CLI that exits on startup blocked for the 60s initialize
+  timeout instead of failing immediately. Both transports now fail pending
+  requests when stdout closes.
+
 ### Internal/Other Changes
 
 - `scripts/download_cli.go` validates `CLAUDE_CLI_VERSION` against a concrete
   version pattern before it reaches a download URL, and the default bundled
   version tracks the SDK (Python #1117).
+- The `internal/subprocess` tests now spawn a compiled Go mock CLI that speaks
+  the control protocol instead of a shell script that could not answer the
+  handshake (and, being a `.bat`, could not even be spawned on Windows under
+  the new batch-script refusal).
+- `TestFindCLINodeJSValidation` isolates `HOME` as well as `PATH`; isolating
+  `PATH` alone let a developer's `~/.local/bin/claude` satisfy discovery before
+  the Node.js check it was asserting on.
 - Updated bundled Claude CLI to version 2.1.220.
 - Bumped SDK version to 0.2.128.
 

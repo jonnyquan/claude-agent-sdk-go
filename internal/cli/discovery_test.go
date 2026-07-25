@@ -661,16 +661,11 @@ func TestFindCLINodeJSValidation(t *testing.T) {
 	// Test when Node.js is not available
 	t.Run("nodejs_not_found", func(t *testing.T) {
 		skipIfClaudeAtAbsolutePath(t)
-		// Isolate environment
-		originalPath := os.Getenv("PATH")
-		if err := os.Setenv("PATH", "/nonexistent/path"); err != nil {
-			t.Fatalf("Failed to set PATH: %v", err)
-		}
-		defer func() {
-			if err := os.Setenv("PATH", originalPath); err != nil {
-				t.Logf("Failed to restore PATH: %v", err)
-			}
-		}()
+		// Isolate both PATH and HOME: getCommonCLILocations() resolves most of
+		// its probes against the home directory, so isolating PATH alone lets a
+		// developer's ~/.local/bin/claude (or ~/.npm-global, ~/.claude/local, …)
+		// satisfy FindCLI before it ever reaches the Node.js check.
+		defer setupIsolatedEnvironment(t)()
 
 		_, err := FindCLI()
 		if err == nil {

@@ -330,10 +330,6 @@ func (t *Transport) Connect(ctx context.Context) error {
 		go t.readStderr(stderrPipe)
 	}
 
-	// Start I/O handling goroutines
-	t.wg.Add(1)
-	go t.handleStdout()
-
 	// Always initialize control protocol for streaming mode
 
 	// Create hook processor when hooks or can_use_tool callback are configured.
@@ -366,6 +362,13 @@ func (t *Transport) Connect(ctx context.Context) error {
 
 	// Create control protocol handler
 	t.controlProtocol = query.NewControlProtocol(t.ctx, t.hookProcessor, writeFn, sdkMCPServers)
+
+	// Start the stdout reader only now: it is the goroutine that routes
+	// control_response frames back to the protocol, so starting it before
+	// t.controlProtocol is assigned races the initialize handshake's own
+	// response against the write of the field that handles it.
+	t.wg.Add(1)
+	go t.handleStdout()
 
 	// Build agents dict for initialize request — serializes all non-nil
 	// fields (description, prompt, tools, disallowedTools, model, skills,
@@ -782,6 +785,12 @@ func (t *Transport) handleStdout() {
 	defer close(t.msgChan)
 	defer close(t.errChan)
 
+	// Snapshot the control protocol: Connect assigns it before starting this
+	// goroutine, but Close() nils the field out under t.mu, and this goroutine
+	// holds no lock. Reading the field here instead of below keeps the two
+	// from racing, and a protocol handed a frame after Close is harmless.
+	cp := t.controlProtocol
+
 	// The CLI writes NDJSON: one message per line. bufio.Scanner frames the
 	// lines; the buffer cap bounds a single message the way Python's
 	// _max_buffer_size guard does, and an over-cap line surfaces below as a
@@ -811,8 +820,8 @@ func (t *Transport) handleStdout() {
 			if msgType, ok := rawMsg["type"].(string); ok {
 				switch msgType {
 				case "control_request", "control_response", "control_cancel_request":
-					if t.controlProtocol != nil {
-						if err := t.controlProtocol.HandleIncomingMessage(msgType, []byte(line)); err != nil {
+					if cp != nil {
+						if err := cp.HandleIncomingMessage(msgType, []byte(line)); err != nil {
 							select {
 							case t.errChan <- fmt.Errorf("control protocol error: %w", err):
 							case <-t.ctx.Done():
@@ -896,8 +905,8 @@ func (t *Transport) handleStdout() {
 				err,
 			)
 		}
-		if t.controlProtocol != nil {
-			t.controlProtocol.FailPendingRequests(scanErr)
+		if cp != nil {
+			cp.FailPendingRequests(scanErr)
 		}
 		select {
 		case t.errChan <- scanErr:
@@ -906,47 +915,62 @@ func (t *Transport) handleStdout() {
 		return
 	}
 
+	// Stdout is closed, so nothing can answer a pending control request any
+	// more. Fail them on every exit path below rather than letting each burn
+	// its full timeout — initialize alone waits 60s, which is what a caller
+	// connecting to a CLI that dies on startup would otherwise pay.
+	failPending := func(err error) {
+		if cp != nil {
+			cp.FailPendingRequests(err)
+		}
+	}
+	eofErr := fmt.Errorf("CLI closed stdout before answering the control request")
+
 	// Match Python SDK behavior: after stdout closes, wait for process exit
 	// and surface non-zero exit status as ProcessError.
 	if t.ctx != nil {
 		select {
 		case <-t.ctx.Done():
+			failPending(eofErr)
 			return
 		default:
 		}
 	}
 	if t.cmd == nil {
+		failPending(eofErr)
 		return
 	}
 
-	if err := t.cmd.Wait(); err != nil {
-		exitCode := -1
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		}
-		// When the CLI emits a result with is_error=true and exits non-zero
-		// (for shell-script consumers), replace the generic "Command failed"
-		// with the structured error text the CLI already reported. Mirrors
-		// Python SDK Query.readMessages.
-		message := "Command failed"
-		t.lastErrorMu.Lock()
-		errText := t.lastErrorResultText
-		t.lastErrorMu.Unlock()
-		if errText != nil {
-			message = "Claude Code returned an error result: " + *errText
-		}
-		processErr := shared.NewProcessError(
-			message,
-			exitCode,
-			"Check stderr output for details",
-		)
-		if t.controlProtocol != nil {
-			t.controlProtocol.FailPendingRequests(processErr)
-		}
-		select {
-		case t.errChan <- processErr:
-		case <-t.ctx.Done():
-		}
+	err := t.cmd.Wait()
+	if err == nil {
+		failPending(eofErr)
+		return
+	}
+
+	exitCode := -1
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		exitCode = exitErr.ExitCode()
+	}
+	// When the CLI emits a result with is_error=true and exits non-zero
+	// (for shell-script consumers), replace the generic "Command failed"
+	// with the structured error text the CLI already reported. Mirrors
+	// Python SDK Query.readMessages.
+	message := "Command failed"
+	t.lastErrorMu.Lock()
+	errText := t.lastErrorResultText
+	t.lastErrorMu.Unlock()
+	if errText != nil {
+		message = "Claude Code returned an error result: " + *errText
+	}
+	processErr := shared.NewProcessError(
+		message,
+		exitCode,
+		"Check stderr output for details",
+	)
+	failPending(processErr)
+	select {
+	case t.errChan <- processErr:
+	case <-t.ctx.Done():
 	}
 }
 
