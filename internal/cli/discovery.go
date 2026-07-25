@@ -345,11 +345,16 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	if options.ContinueConversation {
 		cmd = append(cmd, "--continue")
 	}
+	// Pass these as --flag=value rather than as two argv tokens. The CLI
+	// declares --resume with an optional value, so in the two-token form a
+	// dash-leading value is not bound to the flag and is instead parsed as a
+	// separate CLI flag — letting an untrusted value inject arbitrary flags.
+	// The equals form always binds the value to the flag.
 	if options.Resume != nil {
-		cmd = append(cmd, "--resume", *options.Resume)
+		cmd = append(cmd, "--resume="+*options.Resume)
 	}
 	if options.SessionID != nil && *options.SessionID != "" {
-		cmd = append(cmd, "--session-id", *options.SessionID)
+		cmd = append(cmd, "--session-id="+*options.SessionID)
 	}
 	if options.MaxTurns > 0 {
 		cmd = append(cmd, "--max-turns", fmt.Sprintf("%d", options.MaxTurns))
@@ -577,10 +582,16 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 
 func addExtraFlags(cmd []string, options *shared.Options) []string {
 	for flag, value := range options.ExtraArgs {
-		if value == nil {
+		switch {
+		case value == nil:
 			// Boolean flag
 			cmd = append(cmd, "--"+flag)
-		} else {
+		case strings.HasPrefix(*value, "-"):
+			// A dash-leading value is not bound to its flag in the two-token
+			// form when the CLI declares the option with an optional value; the
+			// equals form always binds.
+			cmd = append(cmd, "--"+flag+"="+*value)
+		default:
 			// Flag with value
 			cmd = append(cmd, "--"+flag, *value)
 		}

@@ -10,9 +10,9 @@ import (
 
 // shadowed helpers so projectsDirForOptions stays one tight block.
 var (
-	filepathJoin   = filepath.Join
-	osGetenv       = os.Getenv
-	osUserHomeDir  = os.UserHomeDir
+	filepathJoin  = filepath.Join
+	osGetenv      = os.Getenv
+	osUserHomeDir = os.UserHomeDir
 )
 
 // InMemorySessionStore is an in-memory SessionStore implementation for
@@ -194,4 +194,23 @@ func TagSessionViaStore(ctx context.Context, store SessionStore, sessionID strin
 // the adapter doesn't implement Delete.
 func DeleteSessionViaStore(ctx context.Context, store SessionStore, sessionID, directory string) error {
 	return sessions.DeleteSessionViaStore(ctx, store, sessionID, directory)
+}
+
+// mirrorErrorReporter adapts a transport that can surface mirror failures into
+// a MirrorBatcher OnError callback, so a SessionStore.Append failure reaches the
+// consumer as a MirrorErrorMessage on the message stream.
+//
+// Returns nil for a transport without the capability (e.g. a custom Transport
+// supplied by the caller), which leaves the batcher's error handling as a no-op
+// beyond its own logging — matching the previous behavior for those transports.
+func mirrorErrorReporter(tr Transport) MirrorErrorCallback {
+	reporter, ok := tr.(interface {
+		ReportMirrorError(key *SessionKey, err error)
+	})
+	if !ok {
+		return nil
+	}
+	return func(_ context.Context, key *SessionKey, err error) {
+		reporter.ReportMirrorError(key, err)
+	}
 }

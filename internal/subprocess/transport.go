@@ -182,6 +182,15 @@ func (t *Transport) Connect(ctx context.Context) error {
 		return fmt.Errorf("transport already connected")
 	}
 
+	// Validate the resolved CLI and the option values that become argv tokens
+	// before anything is spawned (Windows batch-script / cmd.exe injection).
+	if err := shared.RejectWindowsBatchCLI(t.cliPath); err != nil {
+		return err
+	}
+	if err := shared.ValidateSpawnOptions(t.options); err != nil {
+		return err
+	}
+
 	// Build command - always use streaming mode
 	args := cli.BuildCommand(t.cliPath, t.options)
 
@@ -816,9 +825,12 @@ func (t *Transport) cleanup() {
 
 	// Note: stderr is now handled via pipe, no cleanup needed
 
-	// Drop from the parent-exit cleanup registry — child has exited or
-	// will be terminated synchronously below.
-	if t.cmd != nil {
+	// Drop from the parent-exit cleanup registry only for a child we actually
+	// reaped (ProcessState is non-nil exactly once Wait has returned). A
+	// still-running process — kill raced, or the wait timed out — stays
+	// registered so the signal reaper gets a chance at it; dropping it here is
+	// what turns an interrupted Close() into a leaked child.
+	if t.cmd != nil && t.cmd.ProcessState != nil {
 		unregisterActiveChild(t.cmd)
 	}
 

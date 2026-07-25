@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/discovery"
+	"github.com/jonnyquan/claude-agent-sdk-go/internal/shared"
 	"github.com/jonnyquan/claude-agent-sdk-go/internal/transport"
 )
 
@@ -226,6 +227,9 @@ func (c *ClientImpl) transportOptions() *Options {
 		return c.options
 	}
 
+	// Advisory: warn if other options shadow the callback.
+	shared.WarnIfCanUseToolShadowed(c.options)
+
 	cloned := *c.options
 	stdio := "stdio"
 	cloned.PermissionPromptToolName = &stdio
@@ -321,9 +325,11 @@ func (c *ClientImpl) Connect(ctx context.Context, prompts ...StreamMessage) erro
 			maxBytes = 0
 		}
 		batcher := NewTranscriptMirrorBatcher(MirrorBatcherConfig{
-			Store:             c.options.SessionStore,
-			ProjectsDir:       projectsDir,
-			OnError:           nil,
+			Store:       c.options.SessionStore,
+			ProjectsDir: projectsDir,
+			// A dropped batch is not retried, so this message is the
+			// consumer's only signal that the store fell behind.
+			OnError:           mirrorErrorReporter(c.transport),
 			MaxPendingEntries: maxEntries,
 			MaxPendingBytes:   maxBytes,
 		})

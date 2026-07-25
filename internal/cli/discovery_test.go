@@ -500,7 +500,8 @@ func validateFullOptionsCommand(t *testing.T, cmd []string) {
 	assertContainsArgs(t, cmd, "--system-prompt", "You are a helpful assistant")
 	assertContainsArgs(t, cmd, "--model", "claude-3-sonnet")
 	assertContainsArg(t, cmd, "--continue")
-	assertContainsArgs(t, cmd, "--resume", "session123")
+	// Single =-joined token: a dash-leading value must stay bound to the flag.
+	assertContainsArg(t, cmd, "--resume=session123")
 	assertContainsArg(t, cmd, "--custom-flag")
 	assertContainsArgs(t, cmd, "--with-value", "test")
 }

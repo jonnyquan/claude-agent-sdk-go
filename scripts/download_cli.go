@@ -7,18 +7,55 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 )
 
 const (
-	defaultCLIVersion = "2.0.50"
+	defaultCLIVersion = "2.1.220"
 	baseDownloadURL   = "https://github.com/anthropics/claude-code/releases/download/v"
 )
+
+// versionPattern admits a deliberate subset of what the installer accepts. The
+// installer's suffix rule (`-[^\s]+`) would allow quotes, slashes and
+// semicolons; narrowing it to the characters real versions use keeps a value
+// taken from the environment from steering the download URL somewhere else.
+//
+// Matched with a full-string anchor so a trailing newline or an obvious prefix
+// like "1.0.0; id" is rejected rather than silently accepted.
+var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.+-]+)?$`)
+
+// validateVersion returns the usable form of version, or an error naming why it
+// is unusable. Surrounding whitespace is stripped first — a trailing "\n" from a
+// file read or a "\r" from a CRLF checkout is unambiguous in intent — and the
+// stripped value is what the caller must use downstream.
+func validateVersion(version, source string) (string, error) {
+	candidate := strings.TrimSpace(version)
+	if versionPattern.MatchString(candidate) {
+		return candidate, nil
+	}
+	// Never normalized away: the caller asked for something unsupported, and
+	// silently downloading a different string is worse.
+	if trimmed := strings.TrimPrefix(strings.TrimPrefix(candidate, "v"), "V"); trimmed != candidate &&
+		versionPattern.MatchString(trimmed) {
+		return "", fmt.Errorf("invalid %s: %q. Did you mean %q? (no leading 'v')", source, candidate, trimmed)
+	}
+	return "", fmt.Errorf(
+		"invalid %s: %q. Expected a concrete version matching %s",
+		source, version, versionPattern.String(),
+	)
+}
 
 func main() {
 	version := os.Getenv("CLAUDE_CLI_VERSION")
 	if version == "" {
 		version = defaultCLIVersion
+	}
+	version, err := validateVersion(version, "CLAUDE_CLI_VERSION")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("Downloading Claude CLI version %s for %s/%s\n", version, runtime.GOOS, runtime.GOARCH)

@@ -16,11 +16,11 @@ const (
 
 // Content block type constants
 const (
-	ContentBlockTypeText             = "text"
-	ContentBlockTypeThinking         = "thinking"
-	ContentBlockTypeToolUse          = "tool_use"
-	ContentBlockTypeToolResult       = "tool_result"
-	ContentBlockTypeServerToolUse    = "server_tool_use"
+	ContentBlockTypeText              = "text"
+	ContentBlockTypeThinking          = "thinking"
+	ContentBlockTypeToolUse           = "tool_use"
+	ContentBlockTypeToolResult        = "tool_result"
+	ContentBlockTypeServerToolUse     = "server_tool_use"
 	ContentBlockTypeAdvisorToolResult = "advisor_tool_result"
 	// Note: Python SDK does not include "image" in ContentBlock types
 )
@@ -30,14 +30,14 @@ type ServerToolName = string
 
 // Known server tool names (mirrors Python SDK's ServerToolName Literal).
 const (
-	ServerToolNameAdvisor                  ServerToolName = "advisor"
-	ServerToolNameWebSearch                ServerToolName = "web_search"
-	ServerToolNameWebFetch                 ServerToolName = "web_fetch"
-	ServerToolNameCodeExecution            ServerToolName = "code_execution"
-	ServerToolNameBashCodeExecution        ServerToolName = "bash_code_execution"
-	ServerToolNameTextEditorCodeExecution  ServerToolName = "text_editor_code_execution"
-	ServerToolNameToolSearchToolRegex      ServerToolName = "tool_search_tool_regex"
-	ServerToolNameToolSearchToolBM25       ServerToolName = "tool_search_tool_bm25"
+	ServerToolNameAdvisor                 ServerToolName = "advisor"
+	ServerToolNameWebSearch               ServerToolName = "web_search"
+	ServerToolNameWebFetch                ServerToolName = "web_fetch"
+	ServerToolNameCodeExecution           ServerToolName = "code_execution"
+	ServerToolNameBashCodeExecution       ServerToolName = "bash_code_execution"
+	ServerToolNameTextEditorCodeExecution ServerToolName = "text_editor_code_execution"
+	ServerToolNameToolSearchToolRegex     ServerToolName = "tool_search_tool_regex"
+	ServerToolNameToolSearchToolBM25      ServerToolName = "tool_search_tool_bm25"
 )
 
 // AssistantMessageError represents error types for assistant messages
@@ -310,29 +310,133 @@ type DeferredToolUse struct {
 	Input map[string]any `json:"input"`
 }
 
+// ModelUsage is the per-model token usage and cost breakdown reported on a
+// ResultMessage. Field names match the TypeScript SDK's ModelUsage shape
+// (camelCase on the wire), since the value is passed through verbatim from the
+// CLI's modelUsage field.
+type ModelUsage struct {
+	InputTokens              int     `json:"inputTokens"`
+	OutputTokens             int     `json:"outputTokens"`
+	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
+	WebSearchRequests        int     `json:"webSearchRequests"`
+	CostUSD                  float64 `json:"costUSD"`
+	ContextWindow            int     `json:"contextWindow"`
+	MaxOutputTokens          int     `json:"maxOutputTokens"`
+	// CanonicalModel is the canonical model id used for the pricing lookup
+	// (e.g. "claude-opus-4-7"). It may differ from the raw model string this
+	// entry is keyed by (provider-specific ids, aliases). Empty when the CLI
+	// did not report one.
+	CanonicalModel string `json:"canonicalModel,omitempty"`
+	// Provider is the API provider that served this model ("firstParty",
+	// "bedrock", "vertex", "foundry", "anthropicAws", "anthropicGoogleCloud",
+	// "mantle", "gateway"). Empty when the CLI did not report one.
+	Provider string `json:"provider,omitempty"`
+	// Raw preserves the unparsed entry so fields added by newer CLI versions
+	// stay reachable without an SDK upgrade.
+	Raw map[string]any `json:"-"`
+}
+
 // ResultMessage represents the final result of a conversation turn.
 type ResultMessage struct {
-	MessageType       string           `json:"type"`
-	Subtype           string           `json:"subtype"`
-	DurationMs        int              `json:"duration_ms"`
-	DurationAPIMs     int              `json:"duration_api_ms"`
-	IsError           bool             `json:"is_error"`
-	NumTurns          int              `json:"num_turns"`
-	SessionID         string           `json:"session_id"`
-	StopReason        *string          `json:"stop_reason,omitempty"`
-	TotalCostUSD      *float64         `json:"total_cost_usd,omitempty"`
-	Usage             *map[string]any  `json:"usage,omitempty"`
-	Result            *string          `json:"result,omitempty"`            // Note: Python SDK uses string type
-	StructuredOutput  interface{}      `json:"structured_output,omitempty"` // Structured output when using JSON schema
-	ModelUsage        map[string]any   `json:"model_usage,omitempty"`
-	PermissionDenials []any            `json:"permission_denials,omitempty"`
-	DeferredToolUse   *DeferredToolUse `json:"deferred_tool_use,omitempty"`
-	Errors            []string         `json:"errors,omitempty"`
+	MessageType       string                `json:"type"`
+	Subtype           string                `json:"subtype"`
+	DurationMs        int                   `json:"duration_ms"`
+	DurationAPIMs     int                   `json:"duration_api_ms"`
+	IsError           bool                  `json:"is_error"`
+	NumTurns          int                   `json:"num_turns"`
+	SessionID         string                `json:"session_id"`
+	StopReason        *string               `json:"stop_reason,omitempty"`
+	TotalCostUSD      *float64              `json:"total_cost_usd,omitempty"`
+	Usage             *map[string]any       `json:"usage,omitempty"`
+	Result            *string               `json:"result,omitempty"`            // Note: Python SDK uses string type
+	StructuredOutput  interface{}           `json:"structured_output,omitempty"` // Structured output when using JSON schema
+	ModelUsage        map[string]ModelUsage `json:"model_usage,omitempty"`
+	PermissionDenials []any                 `json:"permission_denials,omitempty"`
+	DeferredToolUse   *DeferredToolUse      `json:"deferred_tool_use,omitempty"`
+	Errors            []string              `json:"errors,omitempty"`
 	// APIErrorStatus surfaces the HTTP status code (e.g. 429, 500, 529) of a
 	// failing API call when IsError=true and Subtype=="success"; nil otherwise.
 	// Emitted by the CLI since v2.1.110. Safe to log (no message content).
 	APIErrorStatus *int    `json:"api_error_status,omitempty"`
 	UUID           *string `json:"uuid,omitempty"`
+	// TerminalReason reports why the query loop terminated (e.g. "completed",
+	// "max_turns", "aborted_streaming"). "aborted_streaming" or "aborted_tools"
+	// means the turn was cancelled (via Client.Interrupt or an interrupt control
+	// request). nil when the CLI did not report a terminal reason — older CLI
+	// versions, or a result that bypassed the query loop such as a local slash
+	// command. Mirrors the TypeScript SDK's SDKResultMessage.terminal_reason.
+	TerminalReason *string `json:"terminal_reason,omitempty"`
+}
+
+// Terminal reasons reported on ResultMessage.TerminalReason. The CLI may add
+// values, so treat these as the known set rather than an exhaustive one.
+const (
+	TerminalReasonCompleted        = "completed"
+	TerminalReasonMaxTurns         = "max_turns"
+	TerminalReasonAbortedStreaming = "aborted_streaming"
+	TerminalReasonAbortedTools     = "aborted_tools"
+)
+
+// IsAbortedTerminalReason reports whether reason indicates the turn was
+// cancelled rather than finished on its own.
+func IsAbortedTerminalReason(reason string) bool {
+	return reason == TerminalReasonAbortedStreaming || reason == TerminalReasonAbortedTools
+}
+
+// ParseModelUsage converts the CLI's raw `modelUsage` object into the typed
+// per-model breakdown. Parsed defensively: a non-object value yields nil, and a
+// non-object entry is skipped rather than failing the whole result message —
+// usage accounting must never be the reason a turn's result is unreadable.
+func ParseModelUsage(raw any) map[string]ModelUsage {
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]ModelUsage, len(obj))
+	for model, entryRaw := range obj {
+		entry, ok := entryRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		out[model] = ModelUsage{
+			InputTokens:              jsonInt(entry, "inputTokens"),
+			OutputTokens:             jsonInt(entry, "outputTokens"),
+			CacheReadInputTokens:     jsonInt(entry, "cacheReadInputTokens"),
+			CacheCreationInputTokens: jsonInt(entry, "cacheCreationInputTokens"),
+			WebSearchRequests:        jsonInt(entry, "webSearchRequests"),
+			CostUSD:                  jsonFloat(entry, "costUSD"),
+			ContextWindow:            jsonInt(entry, "contextWindow"),
+			MaxOutputTokens:          jsonInt(entry, "maxOutputTokens"),
+			CanonicalModel:           jsonString(entry, "canonicalModel"),
+			Provider:                 jsonString(entry, "provider"),
+			Raw:                      entry,
+		}
+	}
+	return out
+}
+
+// jsonInt reads a numeric field from a decoded JSON object. encoding/json
+// decodes every number into float64, so that is the only shape to accept.
+func jsonInt(obj map[string]any, key string) int {
+	if v, ok := obj[key].(float64); ok {
+		return int(v)
+	}
+	return 0
+}
+
+func jsonFloat(obj map[string]any, key string) float64 {
+	if v, ok := obj[key].(float64); ok {
+		return v
+	}
+	return 0
+}
+
+func jsonString(obj map[string]any, key string) string {
+	if v, ok := obj[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // Type returns the message type for ResultMessage.

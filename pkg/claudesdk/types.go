@@ -78,6 +78,33 @@ const (
 // ResultMessage represents a result or status message.
 type ResultMessage = shared.ResultMessage
 
+// ModelUsage is the per-model token usage and cost breakdown carried on
+// ResultMessage.ModelUsage.
+type ModelUsage = shared.ModelUsage
+
+// Terminal reasons reported on ResultMessage.TerminalReason.
+const (
+	TerminalReasonCompleted        = shared.TerminalReasonCompleted
+	TerminalReasonMaxTurns         = shared.TerminalReasonMaxTurns
+	TerminalReasonAbortedStreaming = shared.TerminalReasonAbortedStreaming
+	TerminalReasonAbortedTools     = shared.TerminalReasonAbortedTools
+)
+
+// IsAbortedTerminalReason reports whether a ResultMessage.TerminalReason value
+// means the turn was cancelled rather than finished on its own.
+var IsAbortedTerminalReason = shared.IsAbortedTerminalReason
+
+// SetCanUseToolShadowedLogger replaces the sink for the advisory emitted when a
+// CanUseTool callback is set but some tool calls are auto-approved before it
+// runs (an AllowedTools entry that allows a whole tool, or
+// PermissionModeBypassPermissions). Pass nil to silence the advisory — the Go
+// equivalent of filtering Python's CanUseToolShadowedWarning.
+//
+// Call during program setup, before the first Connect.
+func SetCanUseToolShadowedLogger(logger func(message string)) {
+	shared.CanUseToolShadowedLogger = logger
+}
+
 // TextBlock represents a text content block.
 type TextBlock = shared.TextBlock
 

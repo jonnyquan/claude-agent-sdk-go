@@ -33,12 +33,32 @@ func FindCLI() (string, error) {
 	}
 
 	// 1. Check PATH first - most common case
+	var lookPathHit string
 	if path, err := exec.LookPath("claude"); err == nil {
-		// Check version (warning only, don't fail)
-		if verErr := CheckCLIVersion(path); verErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: %v\n", verErr)
+		if runtime.GOOS != windowsOS || shared.IsNativeWindowsExecutable(path) {
+			// Check version (warning only, don't fail)
+			if verErr := CheckCLIVersion(path); verErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: %v\n", verErr)
+			}
+			return path, nil
 		}
-		return path, nil
+		// Windows resolved something CreateProcess cannot run directly as the
+		// CLI: npm's claude.cmd shim (which Connect refuses to spawn) or an
+		// extensionless wrapper script from a git-bash / WSL setup (which fails
+		// at spawn). LookPath walks PATH directory-major, so such an entry in an
+		// early PATH directory shadows a native claude.exe installed in a later
+		// one. Prefer any discoverable native executable, and keep this hit only
+		// as the last resort so a shim-only machine still gets the explanatory
+		// batch-script refusal from Connect. The claude.exe probe is vetted too:
+		// PATHEXT resolution can append an extension and hand back
+		// "claude.exe.cmd".
+		if exe, exeErr := exec.LookPath("claude.exe"); exeErr == nil && shared.IsNativeWindowsExecutable(exe) {
+			if verErr := CheckCLIVersion(exe); verErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: %v\n", verErr)
+			}
+			return exe, nil
+		}
+		lookPathHit = path
 	}
 
 	// 2. Check platform-specific common locations
@@ -58,6 +78,26 @@ func FindCLI() (string, error) {
 			}
 			return location, nil
 		}
+	}
+
+	if lookPathHit != "" {
+		// No native executable was discoverable anywhere: return the original
+		// LookPath hit so Connect raises the batch-script refusal (with its
+		// remediation) for a shim, or the spawn error for a wrapper script,
+		// rather than a bare not-found error.
+		return lookPathHit, nil
+	}
+
+	if runtime.GOOS == windowsOS {
+		// npm's Windows install is a claude.cmd shim, which Connect refuses
+		// (shared.RejectWindowsBatchCLI), so do not recommend it.
+		return "", shared.NewCLINotFoundError("",
+			"Claude Code not found. Install the native claude.exe with (PowerShell):\n"+
+				"  irm https://claude.ai/install.ps1 | iex\n\n"+
+				"Or provide the path to a claude.exe when creating the client:\n"+
+				`  claudesdk.WithCLIPath("C:\\path\\to\\claude.exe")`+"\n\n"+
+				"(npm install -g @anthropic-ai/claude-code produces a claude.cmd "+
+				"shim, which this SDK refuses to run on Windows.)")
 	}
 
 	// 3. Check Node.js dependency
@@ -90,11 +130,19 @@ func getCommonCLILocations() []string {
 
 	switch runtime.GOOS {
 	case windowsOS:
+		// Only the native installer's claude.exe. os.Stat does no PATHEXT
+		// resolution, so the .exe name must be probed explicitly. The npm
+		// claude.cmd shims previously listed here are gone on purpose: Connect
+		// refuses to spawn a batch script (BatBadBut / CVE-2024-27980), so
+		// returning one only converts a clear not-found error into a confusing
+		// refusal. The POSIX-shaped entries are likewise not probed on Windows:
+		// an extensionless match (a WSL / git-bash script artifact) would
+		// preempt the explanatory refusal with an opaque spawn failure, and a
+		// rooted-but-driveless "/usr/local/bin/claude" resolves against the
+		// current drive (C:\usr\local\bin\...), a location another local user
+		// can create — a binary-planting probe.
 		locations = []string{
-			filepath.Join(homeDir, "AppData", "Roaming", "npm", "claude.cmd"),
-			filepath.Join("C:", "Program Files", "nodejs", "claude.cmd"),
-			filepath.Join(homeDir, ".npm-global", "claude.cmd"),
-			filepath.Join(homeDir, "node_modules", ".bin", "claude.cmd"),
+			filepath.Join(homeDir, ".local", "bin", "claude.exe"),
 		}
 	default: // Unix-like systems
 		locations = []string{
@@ -146,6 +194,59 @@ func BuildCommandWithPrompt(cliPath string, options *shared.Options) []string {
 	return cmd
 }
 
+// applySkillsDefaults computes the effective AllowedTools and SettingSources for
+// the Skills option. Mirrors Python SDK's _apply_skills_defaults: when
+// Skills.All is set, injects the bare "Skill" tool; otherwise injects
+// "Skill(name)" for each listed entry. SettingSources defaults to
+// ["user","project"] when unset so the CLI discovers installed skills without
+// the caller having to wire up both options manually. Nil Skills is a no-op.
+//
+// settingSourcesSet distinguishes "not configured" from "explicitly empty": an
+// empty list must still reach the CLI (as --setting-sources=) to disable every
+// source, which is why the caller uses the =-joined form.
+//
+// Does not mutate the original options.
+func applySkillsDefaults(options *shared.Options) (allowed []string, settingSources []string, settingSourcesSet bool) {
+	allowed = append(allowed, options.AllowedTools...)
+	if options.SettingSources != nil {
+		settingSources = append(settingSources, options.SettingSources...)
+		settingSourcesSet = true
+	}
+
+	if options.Skills == nil {
+		return allowed, settingSources, settingSourcesSet
+	}
+
+	contains := func(s []string, v string) bool {
+		for _, x := range s {
+			if x == v {
+				return true
+			}
+		}
+		return false
+	}
+
+	if options.Skills.All {
+		if !contains(allowed, "Skill") {
+			allowed = append(allowed, "Skill")
+		}
+	} else {
+		for _, name := range options.Skills.List {
+			pattern := "Skill(" + name + ")"
+			if !contains(allowed, pattern) {
+				allowed = append(allowed, pattern)
+			}
+		}
+	}
+
+	if !settingSourcesSet {
+		settingSources = []string{"user", "project"}
+		settingSourcesSet = true
+	}
+
+	return allowed, settingSources, settingSourcesSet
+}
+
 // addOptionsToCommand adds all Options fields as CLI flags
 func addOptionsToCommand(cmd []string, options *shared.Options) []string {
 	cmd = addToolControlFlags(cmd, options)
@@ -180,8 +281,10 @@ func addToolControlFlags(cmd []string, options *shared.Options) []string {
 		}
 	}
 
-	if len(options.AllowedTools) > 0 {
-		cmd = append(cmd, "--allowedTools", strings.Join(options.AllowedTools, ","))
+	// Skills inject Skill / Skill(name) entries into the effective allowlist.
+	allowed, _, _ := applySkillsDefaults(options)
+	if len(allowed) > 0 {
+		cmd = append(cmd, "--allowedTools", strings.Join(allowed, ","))
 	}
 	if len(options.DisallowedTools) > 0 {
 		cmd = append(cmd, "--disallowedTools", strings.Join(options.DisallowedTools, ","))
@@ -237,6 +340,11 @@ func addModelAndPromptFlags(cmd []string, options *shared.Options) []string {
 		case shared.ThinkingTypeDisabled:
 			cmd = append(cmd, "--thinking", "disabled")
 		}
+		// Forward --thinking-display when set. Not meaningful for "disabled",
+		// where there is no thinking to display.
+		if options.Thinking.Type != shared.ThinkingTypeDisabled && options.Thinking.Display != "" {
+			cmd = append(cmd, "--thinking-display", string(options.Thinking.Display))
+		}
 	} else if options.MaxThinkingTokens != nil {
 		cmd = append(cmd, "--max-thinking-tokens", fmt.Sprintf("%d", *options.MaxThinkingTokens))
 	}
@@ -284,11 +392,16 @@ func addSessionFlags(cmd []string, options *shared.Options) []string {
 	if options.ContinueConversation {
 		cmd = append(cmd, "--continue")
 	}
+	// Pass these as --flag=value rather than as two argv tokens. The CLI
+	// declares --resume with an optional value, so in the two-token form a
+	// dash-leading value is not bound to the flag and is instead parsed as a
+	// separate CLI flag — letting an untrusted value inject arbitrary flags.
+	// The equals form always binds the value to the flag.
 	if options.Resume != nil {
-		cmd = append(cmd, "--resume", *options.Resume)
+		cmd = append(cmd, "--resume="+*options.Resume)
 	}
 	if options.SessionID != nil {
-		cmd = append(cmd, "--session-id", *options.SessionID)
+		cmd = append(cmd, "--session-id="+*options.SessionID)
 	}
 	if options.MaxTurns > 0 {
 		cmd = append(cmd, "--max-turns", fmt.Sprintf("%d", options.MaxTurns))
@@ -463,11 +576,29 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 	if options.IncludePartialMessages {
 		cmd = append(cmd, "--include-partial-messages")
 	}
+	if options.IncludeHookEvents {
+		cmd = append(cmd, "--include-hook-events")
+	}
+	if options.StrictMcpConfig {
+		cmd = append(cmd, "--strict-mcp-config")
+	}
 	if options.ForkSession {
 		cmd = append(cmd, "--fork-session")
 	}
-	if len(options.SettingSources) > 0 {
-		cmd = append(cmd, "--setting-sources", strings.Join(options.SettingSources, ","))
+	// Without this the CLI never emits the transcript_mirror frames the
+	// SessionStore write path consumes, so the store would stay silently empty.
+	if options.SessionStore != nil {
+		cmd = append(cmd, "--session-mirror")
+	}
+
+	// Effective setting sources: an explicit value wins; otherwise
+	// applySkillsDefaults sets ["user","project"] when Skills is configured;
+	// otherwise the flag is not passed at all.
+	_, settingSources, settingSourcesSet := applySkillsDefaults(options)
+	if settingSourcesSet {
+		// The =-joined single-arg form so an explicitly empty list still
+		// reaches the CLI and correctly disables every source (Python fix #822).
+		cmd = append(cmd, "--setting-sources="+strings.Join(settingSources, ","))
 	}
 
 	// Note: Agents are now sent via initialize request, not as CLI flag
@@ -486,10 +617,17 @@ func addAdvancedFlags(cmd []string, options *shared.Options) []string {
 
 func addExtraFlags(cmd []string, options *shared.Options) []string {
 	for flag, value := range options.ExtraArgs {
-		if value == nil {
+		switch {
+		case value == nil:
 			// Boolean flag
 			cmd = append(cmd, "--"+flag)
-		} else {
+		case strings.HasPrefix(*value, "-"):
+			// In the two-token form, a dash-leading value is not bound to its
+			// flag when the CLI declares the option with an optional value — it
+			// parses as a separate flag instead (the same injection the
+			// --resume change above closes). The equals form always binds.
+			cmd = append(cmd, "--"+flag+"="+*value)
+		default:
 			// Flag with value
 			cmd = append(cmd, "--"+flag, *value)
 		}

@@ -73,8 +73,11 @@ func Query(ctx context.Context, prompt string, opts ...Option) (MessageIterator,
 			maxBytes = 0
 		}
 		batcher := NewTranscriptMirrorBatcher(MirrorBatcherConfig{
-			Store:             options.SessionStore,
-			ProjectsDir:       projectsDir,
+			Store:       options.SessionStore,
+			ProjectsDir: projectsDir,
+			// A dropped batch is not retried, so this message is the
+			// consumer's only signal that the store fell behind.
+			OnError:           mirrorErrorReporter(tr),
 			MaxPendingEntries: maxEntries,
 			MaxPendingBytes:   maxBytes,
 		})
@@ -223,6 +226,9 @@ func configureStreamingQueryOptions(options *Options) (*Options, error) {
 		)
 	}
 
+	// Advisory: warn if other options shadow the callback.
+	shared.WarnIfCanUseToolShadowed(options)
+
 	cloned := *options
 	stdio := "stdio"
 	cloned.PermissionPromptToolName = &stdio
@@ -249,6 +255,10 @@ type queryIterator struct {
 	waitForFirstResultBeforeClose bool
 	firstResultCh                 chan struct{}
 	firstResultOnce               sync.Once
+	// tasks tracks delegated tasks still in flight so a result frame that only
+	// ends one turn does not close stdin out from under a background task's
+	// hook / SDK-MCP round trips. See shared.TaskLedger.
+	tasks shared.TaskLedger
 }
 
 func (qi *queryIterator) Next(_ context.Context) (Message, error) {
@@ -278,9 +288,16 @@ func (qi *queryIterator) Next(_ context.Context) (Message, error) {
 				_ = qi.Close()
 				return nil, ErrNoMoreMessages
 			}
-			// Signal first ResultMessage so the deferred EndInput goroutine
-			// (when waitForFirstResultBeforeClose is set) can close stdin.
-			if _, ok := msg.(*ResultMessage); ok && qi.firstResultCh != nil {
+			// Track task lifecycle frames so a result can tell "one turn
+			// ended" apart from "the run is done".
+			qi.tasks.Observe(msg)
+			// Signal the first run-ending ResultMessage so the deferred
+			// EndInput goroutine (when waitForFirstResultBeforeClose is set)
+			// can close stdin. A result that arrives while tasks are still in
+			// flight ends only the current turn: each task completion wakes the
+			// parent for a follow-up turn, so a later result arrives with an
+			// empty ledger and closes stdin then.
+			if _, ok := msg.(*ResultMessage); ok && qi.firstResultCh != nil && qi.tasks.RunEnded() {
 				qi.firstResultOnce.Do(func() { close(qi.firstResultCh) })
 			}
 			return msg, nil
@@ -398,6 +415,8 @@ type queryStreamIterator struct {
 	waitForFirstResultBeforeClose bool
 	firstResultCh                 chan struct{}
 	firstResultOnce               sync.Once
+	// tasks tracks delegated tasks still in flight; see queryIterator.tasks.
+	tasks shared.TaskLedger
 }
 
 func (qi *queryStreamIterator) Next(_ context.Context) (Message, error) {
@@ -424,13 +443,21 @@ func (qi *queryStreamIterator) Next(_ context.Context) (Message, error) {
 				return nil, ErrNoMoreMessages
 			}
 
+			// Track task lifecycle frames so a result can tell "one turn
+			// ended" apart from "the run is done".
+			qi.tasks.Observe(msg)
+
 			shouldClose := false
 			qi.mu.Lock()
 			if _, ok := msg.(*ResultMessage); ok {
 				qi.seenResults++
-				qi.firstResultOnce.Do(func() {
-					close(qi.firstResultCh)
-				})
+				// Only a result with no tasks in flight ends the run; see
+				// queryIterator.Next.
+				if qi.tasks.RunEnded() {
+					qi.firstResultOnce.Do(func() {
+						close(qi.firstResultCh)
+					})
+				}
 			}
 			if !qi.hasInputEnder {
 				if qi.sendCompleted && qi.expectedTurns == 0 {

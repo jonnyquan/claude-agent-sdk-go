@@ -1,5 +1,137 @@
 # Changelog
 
+## 0.2.128
+
+Synced with the Python SDK at v0.2.128 (delta 0.2.107 → 0.2.128) to keep the two
+SDKs at 1:1 parity.
+
+### New Features
+
+- **`TerminalReason` on `ResultMessage`**: `ResultMessage.TerminalReason`
+  surfaces why the query loop ended (`"completed"`, `"max_turns"`,
+  `"aborted_streaming"`, `"aborted_tools"`, …). `"aborted_streaming"` or
+  `"aborted_tools"` means the turn was cancelled via `Client.Interrupt`. Added
+  the `TerminalReason*` constants and the `IsAbortedTerminalReason` helper.
+  `nil` when the CLI did not report one (older CLI, or a result that bypassed
+  the query loop such as a local slash command). Mirrors the TypeScript SDK's
+  `SDKResultMessage.terminal_reason` (Python #1142).
+- **Typed `ModelUsage`**: `ResultMessage.ModelUsage` is now
+  `map[string]ModelUsage` instead of `map[string]any`, with a new `ModelUsage`
+  struct mirroring the TypeScript SDK's shape. Includes the optional
+  `CanonicalModel` and `Provider` fields for stable model identification across
+  provider-specific aliases, plus a `Raw` map so fields added by newer CLI
+  versions stay reachable. Parsed defensively: a malformed entry is skipped
+  rather than failing the result message (Python #1143).
+
+### Bug Fixes
+
+- **Premature stdin closure when background tasks are in flight**: a `result`
+  frame ends one turn, not the run. The one-shot and streaming query iterators
+  no longer close stdin on a result that arrives while delegated tasks
+  (`local_agent`, `local_workflow`) are still running — previously that made
+  SDK-MCP tool calls from background tasks fail with a closed stream and
+  silently bypassed `PreToolUse` hooks. Added `shared.TaskLedger`, which clears a
+  task on a terminal status from *either* a `TaskNotificationMessage` or a
+  `TaskUpdatedMessage` (Python #1103).
+- **Refused batch-script CLI spawning on Windows**: spawning a `.bat`/`.cmd` CLI
+  (including npm's `claude.cmd` shim) is now refused, preventing command
+  injection via cmd.exe metacharacter re-parsing (BatBadBut / CVE-2024-27980
+  class). Every path component is classified, so normalization tricks such as
+  `claude.cmd\...\..` cannot slip past. Windows users on the npm shim should
+  switch to the native installer or point `WithCLIPath` at a `claude.exe`
+  (Python #1127).
+- **Windows CLI discovery reworked**: a non-native `LookPath` hit no longer
+  shadows a `claude.exe` installed later on `PATH`; the Windows location probes
+  are now just the native installer's `claude.exe` (the old npm `claude.cmd`
+  entries and the POSIX-shaped, driveless paths are gone — the latter resolve
+  against the current drive, a binary-planting probe); and the not-found error
+  points at the native installer instead of npm (Python #1127).
+- **Windows cmd.exe metacharacter rejection**: `Resume` and `SessionID` values
+  containing cmd.exe metacharacters (`& | < > ^ % ! "`) or newlines now fail at
+  `Connect` on Windows, so they stay inert even if a cmd.exe hop is ever
+  reintroduced. POSIX behavior is unchanged (Python #1127).
+- **Argv flag injection via `Resume` and `SessionID`**: both are now passed as
+  single `=`-joined argv tokens (`--resume=<value>`) so a dash-prefixed value is
+  never misinterpreted as an independent CLI flag. `ExtraArgs` values that start
+  with `-` use the same `--flag=value` form (Python #1123, #1127).
+- **`CanUseTool` silently shadowed**: an advisory is now emitted when a
+  `CanUseTool` callback is set alongside options that auto-approve tool calls
+  before it runs — `AllowedTools` entries that allow a whole tool (`"Read"`,
+  `"Read()"`, `"Read(*)"`) or `PermissionModeBypassPermissions`. Each distinct
+  message is emitted once per process; route or silence it with
+  `claudesdk.SetCanUseToolShadowedLogger` (Python #1081).
+- **Silently dropped and corrupted CLI stdout lines**: the message parser no
+  longer accumulates speculatively across lines. The CLI writes NDJSON and the
+  transport frames whole lines, so a line that looks like JSON but does not
+  parse is corrupt and now surfaces as a decode error instead of vanishing, and
+  a non-JSON line (e.g. `[SandboxDebug] …`) is skipped without poisoning the
+  next one (Python #347, #1083).
+- **Lost stderr on oversized lines**: the stderr reader frames lines by hand
+  instead of using `bufio.Scanner`, so a producer that never emits a newline
+  gets its output delivered as a partial line at the buffer limit rather than
+  discarded with `ErrTooLong`, and a trailing partial line is flushed at EOF —
+  a diagnostic written without a newline before the CLI stalled is exactly what
+  the caller needs at that moment.
+- **Opaque oversized-message error**: an over-cap stdout line now reports the
+  buffer limit (the caller's lever is `MaxBufferSize`) instead of a bare scanner
+  error, matching Python's `SDKJSONDecodeError`.
+- **Leaked CLI child on interrupted teardown**: a child is dropped from the
+  parent-exit registry only once it has actually been reaped, so a process whose
+  kill raced or whose wait timed out still gets the signal reaper's `SIGTERM`.
+  The live transport had no registry at all and now registers its child on start
+  (Python #1082).
+- **`api_error_status` was not parsed** by the live parser, leaving
+  `ResultMessage.APIErrorStatus` always nil. Now parsed, matching Python and the
+  legacy parser.
+
+### Bug Fixes — live-path parity backlog
+
+A systematic audit against the Python SDK (CLI flags, message subtypes, content
+block types, control-protocol subtypes, option fields and public exports) found
+that the packages actually used by `pkg/claudesdk` — `internal/discovery`,
+`internal/parsing`, `internal/transport` — had drifted behind their unused
+counterparts (`internal/cli`, `internal/parser`, `internal/subprocess`), which
+earlier syncs had kept current. The following options and messages were
+therefore accepted by the public API but silently did nothing. All predate this
+release; every one is now fixed and covered by tests.
+
+- **`SessionStore` never received anything**: the live command builder never
+  passed `--session-mirror`, so the CLI emitted no `transcript_mirror` frames
+  for the mirror batcher to consume. Any configured session store stayed empty.
+- **`SessionStore` failures were silent**: `MirrorErrorMessage` was defined but
+  never parsed and never emitted. A failed `Append` is not retried, so this is
+  the consumer's only signal; the batcher's `OnError` is now wired through
+  `Transport.ReportMirrorError` (non-blocking, matching Python).
+- **`IncludeHookEvents` did nothing**: neither `--include-hook-events` was sent
+  nor were `hook_started` / `hook_response` frames parsed into
+  `HookEventMessage`.
+- **`StrictMcpConfig` did nothing**: `--strict-mcp-config` was never passed.
+- **`Thinking.Display` did nothing**: `--thinking-display` was never passed.
+- **`Skills` did nothing**: the live builder had no `applySkillsDefaults`, so
+  neither the bare `Skill` tool (`SkillsAll`) nor `Skill(name)` entries
+  (`SkillsList`) were injected into `--allowedTools`, and setting sources were
+  not defaulted to `["user","project"]` for skill discovery.
+- **An empty `SettingSources` was dropped**: the two-token form cannot express
+  "disable every source". Now sent as `--setting-sources=` (Python fix #822).
+- **`server_tool_use` / `advisor_tool_result` blocks were discarded**: both are
+  now parsed into `ServerToolUseBlock` / `ServerToolResultBlock` instead of
+  being skipped as unknown types.
+
+### Internal/Other Changes
+
+- `scripts/download_cli.go` validates `CLAUDE_CLI_VERSION` against a concrete
+  version pattern before it reaches a download URL, and the default bundled
+  version tracks the SDK (Python #1117).
+- Updated bundled Claude CLI to version 2.1.220.
+- Bumped SDK version to 0.2.128.
+
+> Note: the Python delta also contains Python-runtime-specific work with no Go
+> analogue — porting `asyncio` primitives to `anyio` for trio compatibility, and
+> shielding `close()` against `anyio` cancellation. Go's `Close()` takes no
+> context and is already uncancellable, and the SDK is context-first throughout,
+> so the portable behavioral parts (only unregistering a reaped child, bounding
+> teardown waits) are what appear above.
+
 ## 0.2.106
 
 Synced with the Python SDK at v0.2.106 to keep the two SDKs at 1:1 parity.

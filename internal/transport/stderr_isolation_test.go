@@ -37,3 +37,55 @@ func TestStderrCallbackPanicDoesNotTerminateLoop(t *testing.T) {
 		}
 	}
 }
+
+// TestStderrFlushesTrailingPartialLine covers the case where the CLI writes its
+// last diagnostic without a trailing newline before stalling or dying — exactly
+// the output the caller needs at that moment, so it must not be swallowed.
+func TestStderrFlushesTrailingPartialLine(t *testing.T) {
+	var received []string
+	tr := &Transport{options: &shared.Options{Stderr: func(line string) {
+		received = append(received, line)
+	}}}
+
+	tr.wg.Add(1)
+	tr.readStderr(io.NopCloser(strings.NewReader("complete\nno trailing newline")))
+
+	want := []string{"complete", "no trailing newline"}
+	if strings.Join(received, "|") != strings.Join(want, "|") {
+		t.Fatalf("received %v, want %v", received, want)
+	}
+}
+
+// TestStderrBoundsNewlineLessProducer covers a producer that never emits a
+// newline: the framer must deliver the output as partial lines at the buffer
+// limit rather than buffering without bound or (as bufio.Scanner would)
+// discarding it all with ErrTooLong.
+func TestStderrBoundsNewlineLessProducer(t *testing.T) {
+	limit := 128 * 1024 // above maxBufferSize's 64 KiB floor
+	var received []string
+	tr := &Transport{options: &shared.Options{
+		Stderr:        func(line string) { received = append(received, line) },
+		MaxBufferSize: &limit,
+	}}
+
+	// Two limits' worth of newline-free output, plus a tail.
+	payload := strings.Repeat("x", 2*limit+10)
+
+	tr.wg.Add(1)
+	tr.readStderr(io.NopCloser(strings.NewReader(payload)))
+
+	if len(received) < 2 {
+		t.Fatalf("expected the output to be flushed as several partial lines, got %d", len(received))
+	}
+	var total int
+	for _, line := range received {
+		total += len(line)
+		if len(line) > 2*limit {
+			t.Fatalf("a single emitted chunk (%d bytes) exceeded the bound", len(line))
+		}
+	}
+	// Nothing may be dropped.
+	if total != len(payload) {
+		t.Fatalf("emitted %d bytes, want %d", total, len(payload))
+	}
+}

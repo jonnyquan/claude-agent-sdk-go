@@ -594,7 +594,7 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 	if structuredOutput, ok := data["structured_output"]; ok {
 		result.StructuredOutput = structuredOutput
 	}
-	if modelUsage, ok := data["modelUsage"].(map[string]any); ok {
+	if modelUsage := shared.ParseModelUsage(data["modelUsage"]); modelUsage != nil {
 		result.ModelUsage = modelUsage
 	}
 	if permissionDenials, ok := data["permission_denials"].([]any); ok {
@@ -612,6 +612,11 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 	// api_error_status: HTTP status of failing API call (CLI v2.1.110+).
 	if status, ok := toInt(data["api_error_status"]); ok {
 		result.APIErrorStatus = &status
+	}
+	// terminal_reason: why the query loop ended (CLI v2.1.218+). Absent on
+	// older CLIs and on results that bypassed the loop (local slash commands).
+	if terminalReason, ok := data["terminal_reason"].(string); ok {
+		result.TerminalReason = &terminalReason
 	}
 	// deferred_tool_use: present when a PreToolUse hook returned permissionDecision="defer".
 	if deferred, ok := data["deferred_tool_use"].(map[string]any); ok {

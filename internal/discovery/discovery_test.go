@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -178,4 +179,190 @@ func TestAddAdvancedFlagsOmitsEmptySettingSources(t *testing.T) {
 			t.Fatalf("expected empty setting sources to be omitted, got %v", cmd)
 		}
 	}
+}
+
+func TestSessionFlagsBindDashLeadingValues(t *testing.T) {
+	t.Parallel()
+
+	// A dash-leading value must never be able to detach from its flag and be
+	// parsed as an independent CLI flag: the CLI declares --resume with an
+	// optional value, so only the =-joined form binds reliably.
+	resume := "--dangerously-skip-permissions"
+	sessionID := "-x"
+	options := shared.NewOptions()
+	options.Resume = &resume
+	options.SessionID = &sessionID
+
+	cmd := addSessionFlags([]string{"claude"}, options)
+
+	if !containsArg(cmd, "--resume="+resume) {
+		t.Errorf("expected --resume=%s as a single token, got %v", resume, cmd)
+	}
+	if !containsArg(cmd, "--session-id="+sessionID) {
+		t.Errorf("expected --session-id=%s as a single token, got %v", sessionID, cmd)
+	}
+	if containsArg(cmd, resume) {
+		t.Errorf("dash-leading value leaked as its own argv token: %v", cmd)
+	}
+}
+
+func TestExtraFlagsBindDashLeadingValues(t *testing.T) {
+	t.Parallel()
+
+	dashValue := "-oops"
+	plainValue := "plain"
+	options := shared.NewOptions()
+	options.ExtraArgs = map[string]*string{
+		"dash":  &dashValue,
+		"plain": &plainValue,
+		"bare":  nil,
+	}
+
+	cmd := addExtraFlags(nil, options)
+
+	if !containsArg(cmd, "--dash="+dashValue) {
+		t.Errorf("expected --dash=%s as a single token, got %v", dashValue, cmd)
+	}
+	// A value that cannot be mistaken for a flag keeps the two-token form.
+	if !containsArgPair(cmd, "--plain", plainValue) {
+		t.Errorf("expected --plain %s as two tokens, got %v", plainValue, cmd)
+	}
+	if !containsArg(cmd, "--bare") {
+		t.Errorf("expected boolean flag --bare, got %v", cmd)
+	}
+}
+
+func containsArg(args []string, target string) bool {
+	for _, arg := range args {
+		if arg == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsArgPair(args []string, flag, value string) bool {
+	for i, arg := range args {
+		if arg == flag && i+1 < len(args) && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAdvancedFlagsForwardPreviouslyDroppedOptions(t *testing.T) {
+	t.Parallel()
+
+	options := shared.NewOptions()
+	options.IncludeHookEvents = true
+	options.StrictMcpConfig = true
+	options.SessionStore = stubSessionStore{}
+
+	cmd := addAdvancedFlags(nil, options)
+
+	for _, flag := range []string{"--include-hook-events", "--strict-mcp-config", "--session-mirror"} {
+		if !containsArg(cmd, flag) {
+			t.Errorf("expected %s, got %v", flag, cmd)
+		}
+	}
+}
+
+func TestSettingSourcesUsesEqualsFormAndPreservesEmpty(t *testing.T) {
+	t.Parallel()
+
+	// An explicitly empty list must still reach the CLI: it means "disable
+	// every setting source", which the two-token form cannot express.
+	options := shared.NewOptions()
+	options.SettingSources = []string{}
+	if cmd := addAdvancedFlags(nil, options); !containsArg(cmd, "--setting-sources=") {
+		t.Errorf("expected --setting-sources= for an empty list, got %v", cmd)
+	}
+
+	options = shared.NewOptions()
+	options.SettingSources = []string{"user", "project"}
+	if cmd := addAdvancedFlags(nil, options); !containsArg(cmd, "--setting-sources=user,project") {
+		t.Errorf("expected --setting-sources=user,project, got %v", cmd)
+	}
+
+	// Unset and no Skills: the flag is not passed at all.
+	options = shared.NewOptions()
+	for _, arg := range addAdvancedFlags(nil, options) {
+		if strings.HasPrefix(arg, "--setting-sources") {
+			t.Errorf("expected no --setting-sources when unset, got %v", arg)
+		}
+	}
+}
+
+func TestSkillsInjectAllowedToolsAndSettingSourceDefaults(t *testing.T) {
+	t.Parallel()
+
+	// skills=all injects the bare Skill tool.
+	options := shared.NewOptions()
+	options.Skills = shared.SkillsAll()
+	cmd := addToolControlFlags(nil, options)
+	if !containsArgPair(cmd, "--allowedTools", "Skill") {
+		t.Errorf("expected Skill in --allowedTools, got %v", cmd)
+	}
+	// ...and defaults setting sources so the CLI can discover installed skills.
+	if !containsArg(addAdvancedFlags(nil, options), "--setting-sources=user,project") {
+		t.Error("skills should default setting sources to user,project")
+	}
+
+	// An explicit list injects Skill(name) specifiers alongside existing tools.
+	options = shared.NewOptions()
+	options.AllowedTools = []string{"Read"}
+	options.Skills = shared.SkillsList("deploy", "review")
+	cmd = addToolControlFlags(nil, options)
+	if !containsArgPair(cmd, "--allowedTools", "Read,Skill(deploy),Skill(review)") {
+		t.Errorf("unexpected --allowedTools: %v", cmd)
+	}
+
+	// The caller's own SettingSources wins over the skills default.
+	options.SettingSources = []string{"project"}
+	if !containsArg(addAdvancedFlags(nil, options), "--setting-sources=project") {
+		t.Error("explicit SettingSources should win over the skills default")
+	}
+
+	// No Skills configured: AllowedTools passes through untouched.
+	options = shared.NewOptions()
+	options.AllowedTools = []string{"Read"}
+	if !containsArgPair(addToolControlFlags(nil, options), "--allowedTools", "Read") {
+		t.Error("AllowedTools should pass through unchanged without Skills")
+	}
+}
+
+func TestThinkingDisplayIsForwarded(t *testing.T) {
+	t.Parallel()
+
+	options := shared.NewOptions()
+	options.Thinking = &shared.ThinkingConfig{
+		Type:    shared.ThinkingTypeAdaptive,
+		Display: shared.ThinkingDisplaySummarized,
+	}
+	if !containsArgPair(addModelAndPromptFlags(nil, options), "--thinking-display", string(shared.ThinkingDisplaySummarized)) {
+		t.Error("expected --thinking-display to be forwarded")
+	}
+
+	// Not meaningful when thinking is disabled — there is nothing to display.
+	options.Thinking = &shared.ThinkingConfig{
+		Type:    shared.ThinkingTypeDisabled,
+		Display: shared.ThinkingDisplaySummarized,
+	}
+	for _, arg := range addModelAndPromptFlags(nil, options) {
+		if arg == "--thinking-display" {
+			t.Error("--thinking-display should be omitted when thinking is disabled")
+		}
+	}
+}
+
+type stubSessionStore struct {
+	shared.UnimplementedSessionStore
+}
+
+func (stubSessionStore) Append(context.Context, shared.SessionKey, []shared.SessionStoreEntry) error {
+	return nil
+}
+
+func (stubSessionStore) Load(context.Context, shared.SessionKey) ([]shared.SessionStoreEntry, error) {
+	return nil, nil
 }

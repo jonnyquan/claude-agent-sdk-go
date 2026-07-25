@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -27,6 +28,10 @@ const (
 	channelBufferSize = 10
 	// terminationTimeoutSeconds is the timeout for graceful process termination.
 	terminationTimeoutSeconds = 5
+	// stderrReadChunkSize is the stderr framer's read buffer. It bounds how much
+	// of a newline-less line is buffered per read, not the line limit itself —
+	// see Transport.maxBufferSize.
+	stderrReadChunkSize = 64 * 1024
 )
 
 // Transport implements the Transport interface using subprocess communication.
@@ -88,6 +93,50 @@ func (t *Transport) SetMirrorBatcher(b shared.MirrorBatcher) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.mirrorBatcher = b
+}
+
+// ReportMirrorError surfaces a SessionStore.Append failure as a system message
+// on the consumer's message stream.
+//
+// Called from the mirror batcher's OnError. The dropped batch is not retried
+// (at-most-once delivery), so this is the consumer's only signal that the store
+// fell behind. Non-blocking: if the message buffer is full the error is logged
+// and dropped rather than back-pressuring the read loop, since the local
+// on-disk transcript is already durable and the session must keep running.
+//
+// Mirrors Python SDK's Query.report_mirror_error.
+func (t *Transport) ReportMirrorError(key *shared.SessionKey, mirrorErr error) {
+	t.mu.RLock()
+	msgChan := t.msgChan
+	connected := t.connected
+	t.mu.RUnlock()
+	if msgChan == nil || !connected || mirrorErr == nil {
+		return
+	}
+
+	data := map[string]any{
+		"type":    "system",
+		"subtype": "mirror_error",
+		"error":   mirrorErr.Error(),
+	}
+	if key != nil {
+		data["key"] = map[string]any{
+			"project_key": key.ProjectKey,
+			"session_id":  key.SessionID,
+			"subpath":     key.Subpath,
+		}
+	}
+	msg := &shared.MirrorErrorMessage{
+		SystemMessage: shared.SystemMessage{Subtype: "mirror_error", Data: data},
+		Error:         mirrorErr.Error(),
+		Key:           key,
+	}
+
+	select {
+	case msgChan <- msg:
+	default:
+		log.Printf("[TranscriptMirrorBatcher] dropped mirror_error (buffer full): %v", mirrorErr)
+	}
 }
 
 // SetMaterializedCleanup registers a cleanup callback to run after Close.
@@ -154,6 +203,18 @@ func (t *Transport) Connect(ctx context.Context) error {
 
 	if t.connected {
 		return fmt.Errorf("transport already connected")
+	}
+
+	// Validate the resolved CLI before anything is spawned with it — this
+	// guards the version probe below as well as the main spawn.
+	if err := shared.RejectWindowsBatchCLI(t.cliPath); err != nil {
+		return err
+	}
+
+	// Reject Windows cmd.exe metacharacters in option values that become argv
+	// tokens (defense in depth; POSIX behavior is unchanged).
+	if err := shared.ValidateSpawnOptions(t.options); err != nil {
+		return err
 	}
 
 	// Match Python SDK behavior: even with explicit CLI path, run a best-effort
@@ -253,6 +314,8 @@ func (t *Transport) Connect(ctx context.Context) error {
 			err,
 		)
 	}
+	// Track the live child for parent-exit cleanup (mirrors Python's atexit).
+	registerActiveChild(t.cmd)
 
 	// Set up context for goroutine management
 	t.ctx, t.cancel = context.WithCancel(ctx)
@@ -638,27 +701,79 @@ func (t *Transport) readStderr(stderr io.ReadCloser) {
 	defer stderr.Close()
 
 	cb := t.options.Stderr
-	scanner := bufio.NewScanner(stderr)
-	for scanner.Scan() {
-		line := scanner.Text()
+	emit := func(line string) {
+		line = strings.TrimRight(line, " \t\r\n")
 		if line == "" {
-			continue
+			return
 		}
 		// Isolate per-line so a panic in the user's callback doesn't terminate
 		// the loop and silently drop every subsequent line for the rest of the
 		// session.
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("stderr callback panicked; continuing: %v", r)
-				}
-			}()
-			cb(line)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("stderr callback panicked; continuing: %v", r)
+			}
 		}()
+		cb(line)
 	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("stderr stream read failed: %v", err)
+
+	// Options.Stderr is documented to receive lines, but a producer that never
+	// emits a newline must not be able to grow the buffer without bound — and
+	// must not silently lose everything it wrote either, which is what
+	// bufio.Scanner's ErrTooLong would do. Frame lines by hand so an oversized
+	// line is delivered as a partial line instead: a diagnostic written without
+	// a trailing newline before the CLI stalled is exactly what the caller needs
+	// at that moment.
+	//
+	// ReadSlice, not ReadString/Scanner: it hands back a chunk with
+	// ErrBufferFull the moment its buffer fills without a newline, which is the
+	// only form that gives chunk-level control. ReadString would keep
+	// accumulating internally and defeat the bound.
+	limit := t.maxBufferSize()
+	reader := bufio.NewReaderSize(stderr, stderrReadChunkSize)
+	var pending strings.Builder
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(chunk) > 0 {
+			// Copy immediately: the slice points into the reader's buffer and
+			// is invalidated by the next read.
+			pending.Write(chunk)
+			switch {
+			case err == nil:
+				// Ends with '\n' — a complete line.
+				emit(pending.String())
+				pending.Reset()
+			case errors.Is(err, bufio.ErrBufferFull) && pending.Len() >= limit:
+				emit(pending.String())
+				pending.Reset()
+			}
+		}
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) {
+			// Flush the trailing partial line before exiting: the CLI may write
+			// its last diagnostic without a newline.
+			if pending.Len() > 0 {
+				emit(pending.String())
+			}
+			if !errors.Is(err, io.EOF) {
+				log.Printf("stderr stream read failed: %v", err)
+			}
+			return
+		}
 	}
+}
+
+// maxBufferSize returns the effective per-message buffer limit, honoring
+// Options.MaxBufferSize and defaulting to parsing.MaxBufferSize (1 MiB) —
+// Python parity for _DEFAULT_MAX_BUFFER_SIZE.
+func (t *Transport) maxBufferSize() int {
+	size := parsing.MaxBufferSize
+	if t.options != nil && t.options.MaxBufferSize != nil && *t.options.MaxBufferSize > 0 {
+		size = *t.options.MaxBufferSize
+	}
+	if size < 64*1024 {
+		size = 64 * 1024
+	}
+	return size
 }
 
 // handleStdout processes stdout in a separate goroutine
@@ -667,14 +782,12 @@ func (t *Transport) handleStdout() {
 	defer close(t.msgChan)
 	defer close(t.errChan)
 
+	// The CLI writes NDJSON: one message per line. bufio.Scanner frames the
+	// lines; the buffer cap bounds a single message the way Python's
+	// _max_buffer_size guard does, and an over-cap line surfaces below as a
+	// JSON decode error naming the limit rather than an opaque scanner error.
+	maxScannerBuffer := t.maxBufferSize()
 	scanner := bufio.NewScanner(t.stdout)
-	maxScannerBuffer := parsing.MaxBufferSize
-	if t.options != nil && t.options.MaxBufferSize != nil && *t.options.MaxBufferSize > 0 {
-		maxScannerBuffer = *t.options.MaxBufferSize
-	}
-	if maxScannerBuffer < 64*1024 {
-		maxScannerBuffer = 64 * 1024
-	}
 	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
 
 	for scanner.Scan() {
@@ -773,7 +886,16 @@ func (t *Transport) handleStdout() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		scanErr := fmt.Errorf("stdout scanner error: %w", err)
+		var scanErr error = fmt.Errorf("stdout scanner error: %w", err)
+		if errors.Is(err, bufio.ErrTooLong) {
+			// Report the limit rather than the framing failure — the caller's
+			// lever is MaxBufferSize. Mirrors Python's SDKJSONDecodeError.
+			scanErr = shared.NewJSONDecodeError(
+				fmt.Sprintf("JSON message exceeded maximum buffer size of %d bytes", maxScannerBuffer),
+				0,
+				err,
+			)
+		}
 		if t.controlProtocol != nil {
 			t.controlProtocol.FailPendingRequests(scanErr)
 		}
@@ -911,6 +1033,14 @@ func (t *Transport) cleanup() {
 	if t.stdout != nil {
 		_ = t.stdout.Close()
 		t.stdout = nil
+	}
+
+	// Stop tracking only a child we actually reaped. A still-running process
+	// (kill raced, or the wait timed out) stays registered so the signal reaper
+	// gets a chance at it. ProcessState is non-nil exactly once Wait has
+	// returned, which is what "reaped" means here.
+	if t.cmd != nil && t.cmd.ProcessState != nil {
+		unregisterActiveChild(t.cmd)
 	}
 
 	// Reset state

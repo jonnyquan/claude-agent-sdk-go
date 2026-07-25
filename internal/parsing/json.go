@@ -166,39 +166,41 @@ func (p *Parser) processJSONLine(jsonLine string) (shared.Message, error) {
 
 // processJSONLineUnlocked is the unlocked version of processJSONLine.
 // Must be called with mutex already held.
+//
+// The CLI writes NDJSON — one message per line — and the transport frames whole
+// lines before calling in, so a line is either a complete message or it is
+// corrupt: there is no later data that could complete it. Speculative
+// accumulation across calls was therefore removed (Python SDK parity); a line
+// that looks like JSON but does not parse now raises instead of being silently
+// dropped, and a non-JSON line is skipped without poisoning the next one (#347).
 func (p *Parser) processJSONLineUnlocked(jsonLine string) (shared.Message, error) {
 	debugLog("[SDK-Parser] 🔧 processJSONLineUnlocked: input length=%d", len(jsonLine))
-	debugLog("[SDK-Parser] 🔧 Buffer before: length=%d", p.buffer.Len())
 
-	p.buffer.WriteString(jsonLine)
-	debugLog("[SDK-Parser] 🔧 Buffer after write: length=%d", p.buffer.Len())
-
-	// Check buffer size limit
-	if p.buffer.Len() > p.maxBufferSize {
-		bufferSize := p.buffer.Len()
+	// Bound a single message. Mirrors Python's guard, which reports the limit
+	// rather than the decode failure that would follow.
+	if len(jsonLine) > p.maxBufferSize {
 		p.buffer.Reset()
 		return nil, shared.NewJSONDecodeError(
-			"buffer overflow",
+			fmt.Sprintf("buffer overflow: JSON message exceeded maximum buffer size of %d bytes", p.maxBufferSize),
 			0,
-			fmt.Errorf("buffer size %d exceeds limit %d", bufferSize, p.maxBufferSize),
+			fmt.Errorf("buffer size %d exceeds limit %d", len(jsonLine), p.maxBufferSize),
 		)
 	}
 
-	// Attempt speculative JSON parsing
-	var rawData map[string]any
-	bufferContent := p.buffer.String()
-	debugLog("[SDK-Parser] 🔧 Attempting to unmarshal buffer content (length=%d)", len(bufferContent))
-
-	if err := json.Unmarshal([]byte(bufferContent), &rawData); err != nil {
-		// JSON is incomplete - continue accumulating
-		// This is NOT an error condition in speculative parsing!
-		debugLog("[SDK-Parser] 🔧 JSON Unmarshal failed (incomplete): %v", err)
+	// Skip lines that carry no message: non-JSON output such as
+	// "[SandboxDebug] ..." that some CLI builds write to stdout (#347).
+	if !strings.HasPrefix(jsonLine, "{") {
+		debugLog("[SDK-Parser] 🔧 Skipping non-JSON line from CLI stdout: %.200s", jsonLine)
 		return nil, nil
 	}
 
-	// Successfully parsed complete JSON - reset buffer and parse message
-	debugLog("[SDK-Parser] 🔧 JSON Unmarshal succeeded, resetting buffer and parsing message")
-	p.buffer.Reset()
+	var rawData map[string]any
+	if err := json.Unmarshal([]byte(jsonLine), &rawData); err != nil {
+		debugLog("[SDK-Parser] 🔧 JSON Unmarshal failed: %v", err)
+		return nil, shared.NewJSONDecodeError(jsonLine, 0, err)
+	}
+
+	debugLog("[SDK-Parser] 🔧 JSON Unmarshal succeeded, parsing message")
 	return p.ParseMessage(rawData)
 }
 
@@ -330,6 +332,30 @@ func (p *Parser) parseSystemMessage(data map[string]any) (shared.Message, error)
 	subtype, ok := data["subtype"].(string)
 	if !ok {
 		return nil, shared.NewMessageParseError("system message missing subtype field", data)
+	}
+
+	// Hook events (emitted when IncludeHookEvents is enabled) arrive as system
+	// messages with subtype hook_started or hook_response. Route them to
+	// HookEventMessage before the switch below.
+	if subtype == "hook_started" || subtype == "hook_response" {
+		msg := &shared.HookEventMessage{
+			SystemMessage: shared.SystemMessage{Subtype: subtype, Data: data},
+		}
+		// The CLI has spelled this key three ways across versions; accept all.
+		if v, ok := data["hook_event"].(string); ok {
+			msg.HookEventName = v
+		} else if v, ok := data["hook_name"].(string); ok {
+			msg.HookEventName = v
+		} else if v, ok := data["hook_event_name"].(string); ok {
+			msg.HookEventName = v
+		}
+		if v, ok := data["session_id"].(string); ok {
+			msg.SessionID = &v
+		}
+		if v, ok := data["uuid"].(string); ok {
+			msg.UUID = &v
+		}
+		return msg, nil
 	}
 
 	base := shared.SystemMessage{
@@ -469,6 +495,29 @@ func (p *Parser) parseSystemMessage(data map[string]any) (shared.Message, error)
 			SessionID:     stringPtr(data, "session_id"),
 			UUID:          stringPtr(data, "uuid"),
 		}, nil
+	case "mirror_error":
+		// SDK-synthesized when a SessionStore.Append fails — never emitted by
+		// the CLI subprocess. Non-fatal: the local on-disk transcript is
+		// already durable, so this only reports that the mirror fell behind.
+		errMsg, _ := data["error"].(string)
+		mirror := &shared.MirrorErrorMessage{
+			SystemMessage: base,
+			Error:         errMsg,
+		}
+		if keyMap, ok := data["key"].(map[string]any); ok {
+			key := &shared.SessionKey{}
+			if v, ok := keyMap["project_key"].(string); ok {
+				key.ProjectKey = v
+			}
+			if v, ok := keyMap["session_id"].(string); ok {
+				key.SessionID = v
+			}
+			if v, ok := keyMap["subpath"].(string); ok {
+				key.Subpath = v
+			}
+			mirror.Key = key
+		}
+		return mirror, nil
 	default:
 		return &base, nil
 	}
@@ -539,7 +588,7 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 	if structuredOutput, ok := data["structured_output"]; ok {
 		result.StructuredOutput = structuredOutput
 	}
-	if modelUsage, ok := data["modelUsage"].(map[string]any); ok {
+	if modelUsage := shared.ParseModelUsage(data["modelUsage"]); modelUsage != nil {
 		result.ModelUsage = modelUsage
 	}
 	if permissionDenials, ok := data["permission_denials"].([]any); ok {
@@ -556,6 +605,15 @@ func (p *Parser) parseResultMessage(data map[string]any) (*shared.ResultMessage,
 	}
 	if uuid, ok := data["uuid"].(string); ok {
 		result.UUID = &uuid
+	}
+	// api_error_status: HTTP status of a failing API call (CLI v2.1.110+).
+	if status, ok := toInt(data["api_error_status"]); ok {
+		result.APIErrorStatus = &status
+	}
+	// terminal_reason: why the query loop ended (CLI v2.1.218+). Absent on
+	// older CLIs and on results that bypassed the loop (local slash commands).
+	if terminalReason, ok := data["terminal_reason"].(string); ok {
+		result.TerminalReason = &terminalReason
 	}
 
 	debugLog("[SDK-Parser] ✅ ResultMessage parsed: subtype=%s, session_id=%s, is_error=%v",
@@ -723,11 +781,53 @@ func (p *Parser) parseContentBlock(blockData any) (shared.ContentBlock, error) {
 		return p.parseToolUseBlock(data)
 	case shared.ContentBlockTypeToolResult:
 		return p.parseToolResultBlock(data)
+	case shared.ContentBlockTypeServerToolUse:
+		return p.parseServerToolUseBlock(data)
+	case shared.ContentBlockTypeAdvisorToolResult:
+		return p.parseServerToolResultBlock(data)
 	default:
-		// Skip unknown content block types (e.g., server_tool_use) to match Python SDK behavior
+		// Skip unknown content block types to match Python SDK behavior: a
+		// block type added by a newer CLI must not break an older SDK.
 		debugLog("[SDK-Parser] ⚠️ Skipping unknown content block type: %s", blockType)
 		return nil, nil
 	}
+}
+
+func (p *Parser) parseServerToolUseBlock(data map[string]any) (shared.ContentBlock, error) {
+	id, ok := data["id"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("server_tool_use block missing id field", data)
+	}
+	name, ok := data["name"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("server_tool_use block missing name field", data)
+	}
+	input, _ := data["input"].(map[string]any)
+	if input == nil {
+		input = make(map[string]any)
+	}
+	return &shared.ServerToolUseBlock{
+		Type:  shared.ContentBlockTypeServerToolUse,
+		ID:    id,
+		Name:  name,
+		Input: input,
+	}, nil
+}
+
+func (p *Parser) parseServerToolResultBlock(data map[string]any) (shared.ContentBlock, error) {
+	toolUseID, ok := data["tool_use_id"].(string)
+	if !ok {
+		return nil, shared.NewMessageParseError("advisor_tool_result block missing tool_use_id field", data)
+	}
+	content, _ := data["content"].(map[string]any)
+	if content == nil {
+		content = make(map[string]any)
+	}
+	return &shared.ServerToolResultBlock{
+		Type:      shared.ContentBlockTypeAdvisorToolResult,
+		ToolUseID: toolUseID,
+		Content:   content,
+	}, nil
 }
 
 func (p *Parser) parseTextBlock(data map[string]any) (shared.ContentBlock, error) {
